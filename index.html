@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NoMistakeShop</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <!-- Top: menu bar (File / Edit / Image / Layer / Filter / Select / View / Help) -->
+  <header id="menu-bar"></header>
+
+  <!-- Below menu: per-tool options bar -->
+  <div id="options-bar"></div>
+
+  <div id="main-row">
+    <!-- Left: vertical tool palette -->
+    <nav id="toolbar"></nav>
+
+    <!-- Center: canvas viewport -->
+    <div id="viewport">
+      <canvas id="display-canvas"></canvas>
+    </div>
+
+    <!-- Right: color picker + layers panel -->
+    <aside id="side-panel">
+      <div id="color-panel"></div>
+      <div id="layers-panel"></div>
+    </aside>
+  </div>
+
+  <!-- Bottom: status bar (doc size, zoom, cursor position) -->
+  <footer id="status-bar"></footer>
+
+  <!-- Modal dialog root (new document, resize, filter params, text input, ...) -->
+  <div id="dialog-root"></div>
+
+  <!-- Hidden file inputs reused by io.js -->
+  <input type="file" id="file-open-image" accept="image/*" style="display:none" />
+  <input type="file" id="file-open-project" accept=".nmsproject,application/json" style="display:none" />
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
