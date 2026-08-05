@@ -1,4 +1,4 @@
-// tests/e2e.smoke.mjs — headless-browser smoke test for NoMistakeShop.
+// tests/e2e.smoke.mjs — headless-browser smoke test for nomistakeshop.
 // Serves the project statically, drives the real app in headless Chrome via
 // puppeteer, and exercises the full smoke checklist from end to end.
 //

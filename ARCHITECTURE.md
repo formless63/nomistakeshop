@@ -1,4 +1,4 @@
-# NoMistakeShop Architecture Contract
+# nomistakeshop Architecture Contract
 
 This document is the **binding contract** between modules. Every module must implement
 exactly the signatures and behaviors described here. No build step: plain ES modules

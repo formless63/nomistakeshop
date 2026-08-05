@@ -1,4 +1,4 @@
-// NoMistakeShop bootstrap — wires every module together.
+// nomistakeshop bootstrap — wires every module together.
 import { state, setTool } from './core/state.js';
 import { renderer } from './core/renderer.js';
 import { history } from './core/history.js';

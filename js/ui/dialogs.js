@@ -129,7 +129,7 @@ function openDialog({ title, okLabel = 'OK', showCancel = true, buildBody, colle
 
 export function alert(message) {
   return openDialog({
-    title: 'NoMistakeShop',
+    title: 'nomistakeshop',
     okLabel: 'OK',
     showCancel: false,
     buildBody(body) {

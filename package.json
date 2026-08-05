@@ -1,7 +1,7 @@
 {
   "name": "nomistakeshop",
   "version": "0.1.0",
-  "description": "A client-side raster image editor (Photoshop-style) with zero build step.",
+  "description": "A free, zero-install Photoshop-style image editor that runs entirely in the browser. Always free. Good vibes only. Make no mistakes.",
   "type": "module",
   "scripts": {
     "start": "python3 -m http.server 8080",
