@@ -215,13 +215,31 @@ export async function exportPsd() {
   }
   const { writePsd } = await loadAgPsd();
   const { width, height } = doc;
-  const stats = { baked: 0, skipped: 0 };
+  const stats = { baked: 0, skipped: 0, rasterized: 0 };
 
   // Clone every pixel layer's canvas so adjustment baking never mutates the
-  // real document.
-  const clones = doc.layers.map((layer) =>
-    layer.type === 'adjustment' ? null : cloneCanvas(layer.canvas),
-  );
+  // real document. Smart layers are rasterized to a doc-size canvas instead
+  // (PSD has no smart-object equivalent for our transform model).
+  // renderSmartLayer is loaded dynamically so this module still works in
+  // builds/tests where the core smart-layer support is absent.
+  let compositeMod = null;
+  const clones = [];
+  for (const layer of doc.layers) {
+    if (layer.type === 'adjustment') {
+      clones.push(null);
+    } else if (layer.type === 'smart') {
+      if (!compositeMod) compositeMod = await import('../core/composite.js');
+      if (typeof compositeMod.renderSmartLayer === 'function') {
+        clones.push(compositeMod.renderSmartLayer(layer, width, height));
+        stats.rasterized++;
+      } else {
+        clones.push(createCanvas(width, height).canvas); // core support absent
+        stats.skipped++;
+      }
+    } else {
+      clones.push(cloneCanvas(layer.canvas));
+    }
+  }
 
   const children = [];
   doc.layers.forEach((layer, i) => {
@@ -267,10 +285,11 @@ export async function exportPsd() {
   const buffer = writePsd({ width, height, children });
   downloadBlob(new Blob([buffer], { type: 'image/vnd.adobe.photoshop' }), 'untitled.psd');
 
-  if (stats.baked || stats.skipped) {
+  if (stats.baked || stats.skipped || stats.rasterized) {
     const parts = [];
     if (stats.baked) parts.push(`${stats.baked} adjustment${stats.baked === 1 ? '' : 's'} baked into pixels`);
     if (stats.skipped) parts.push(`${stats.skipped} adjustment${stats.skipped === 1 ? '' : 's'} skipped`);
+    if (stats.rasterized) parts.push(`${stats.rasterized} smart layer${stats.rasterized === 1 ? '' : 's'} rasterized for PSD export`);
     emit('status:message', { text: `Exported PSD — ${parts.join(', ')}` });
   }
 }

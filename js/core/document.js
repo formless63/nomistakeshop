@@ -1,5 +1,5 @@
 // js/core/document.js — document & layer model (v2: pixel + adjustment layers,
-// optional layer masks).
+// optional layer masks; v5: smart layers with source + transform).
 // doc.layers[0] is the BOTTOM layer; rendering paints index 0 first.
 // Every structural mutation calls history.push(label) BEFORE mutating and
 // emits 'layers:changed' after.
@@ -9,13 +9,17 @@
 //                 canvas, ctx, mask: null | { canvas, ctx, enabled } }
 //   adjustment: { id, type:'adjustment', name, visible, opacity, blendMode,
 //                 adjustment: { filterId, params } }  (no canvas/ctx/mask)
+//   smart:      { id, type:'smart', name, visible, opacity, blendMode,
+//                 source,   // canvas with the ORIGINAL pixels (doc-sized for converted layers)
+//                 transform: { scaleX, scaleY, rotateDeg, offsetX, offsetY },
+//                 mask: null | { canvas, ctx, enabled } }
 // Mask semantics: the mask canvas ALPHA channel is visibility (255 = shown);
 // it is applied at composite time (see composite.js), never destructively.
 
 import { state, emit, setSelection } from './state.js';
 import { history } from './history.js';
 import { createCanvas, cloneCanvas, docColorSpace } from './canvasUtils.js';
-import { compositeLayers } from './composite.js';
+import { compositeLayers, renderSmartLayer } from './composite.js';
 import { getSelectionMask } from '../tools/selectionPath.js';
 
 let nextLayerId = 1;
@@ -124,6 +128,78 @@ export function setAdjustment(id, filterId, params) {
   emit('layer:content', { layerId: id });
 }
 
+// Shared smart→pixel swap: renders the smart layer through its transform and
+// replaces the layer object IN PLACE in doc.layers (same id/name/props/mask,
+// same array position, activeLayerId stays valid). No history push, no events
+// — callers handle those. Used by rasterizeSmartLayer and by transform.js
+// doc-wide ops (whose single history.push covers the swap).
+export function smartLayerToPixel(doc, layer) {
+  const canvas = renderSmartLayer(layer, doc.width, doc.height);
+  const pixel = {
+    id: layer.id,
+    type: 'pixel',
+    name: layer.name,
+    visible: layer.visible,
+    opacity: layer.opacity,
+    blendMode: layer.blendMode,
+    canvas,
+    ctx: canvas.getContext('2d', { willReadFrequently: true, colorSpace: docColorSpace() }),
+    mask: layer.mask || null,
+  };
+  const idx = doc.layers.findIndex((l) => l.id === layer.id);
+  if (idx >= 0) doc.layers[idx] = pixel;
+  return pixel;
+}
+
+export function convertToSmartLayer(id) {
+  const doc = state.doc;
+  if (!doc) return;
+  const idx = doc.layers.findIndex((l) => l.id === id);
+  if (idx === -1) return;
+  const layer = doc.layers[idx];
+  if ((layer.type || 'pixel') !== 'pixel') return; // pixel layers only
+  history.push('Convert to Smart Layer');
+  // Swap the layer object in place: keep id/name/props/mask, adopt the
+  // existing canvas as the pristine source (don't clone), identity transform.
+  doc.layers[idx] = {
+    id: layer.id,
+    type: 'smart',
+    name: layer.name,
+    visible: layer.visible,
+    opacity: layer.opacity,
+    blendMode: layer.blendMode,
+    source: layer.canvas,
+    transform: { scaleX: 1, scaleY: 1, rotateDeg: 0, offsetX: 0, offsetY: 0 },
+    mask: layer.mask || null,
+  };
+  emit('layers:changed');
+  emit('layer:content', { layerId: id });
+}
+
+export function rasterizeSmartLayer(id) {
+  const doc = state.doc;
+  if (!doc) return;
+  const layer = doc.layers.find((l) => l.id === id);
+  if (!layer || layer.type !== 'smart') return;
+  history.push('Rasterize Layer');
+  smartLayerToPixel(doc, layer);
+  emit('layers:changed');
+  emit('layer:content', { layerId: id });
+}
+
+// Merges `partial` into the smart layer's transform and re-renders. Does NOT
+// push history — callers do (multi-edit ops like the move tool are covered by
+// their own stroke-start push).
+export function setSmartTransform(id, partial) {
+  const doc = state.doc;
+  if (!doc) return;
+  const layer = doc.layers.find((l) => l.id === id);
+  if (!layer || layer.type !== 'smart' || !partial) return;
+  layer.transform = { ...layer.transform, ...partial };
+  emit('layer:content', { layerId: id });
+  emit('layers:changed');
+}
+
 export function addLayerMask(id, mode = 'white') {
   const doc = state.doc;
   if (!doc) return;
@@ -158,10 +234,19 @@ export function removeLayerMask(id, apply = false) {
   if (!layer || layer.type === 'adjustment' || !layer.mask) return;
   history.push(apply ? 'Apply Layer Mask' : 'Delete Layer Mask');
   if (apply && layer.mask.enabled) {
-    layer.ctx.save();
-    layer.ctx.globalCompositeOperation = 'destination-in';
-    layer.ctx.drawImage(layer.mask.canvas, 0, 0);
-    layer.ctx.restore();
+    if (layer.type === 'smart') {
+      // Smart layers have no pixel ctx — bake the mask into the source.
+      const srcCtx = layer.source.getContext('2d', { willReadFrequently: true, colorSpace: docColorSpace() });
+      srcCtx.save();
+      srcCtx.globalCompositeOperation = 'destination-in';
+      srcCtx.drawImage(layer.mask.canvas, 0, 0);
+      srcCtx.restore();
+    } else {
+      layer.ctx.save();
+      layer.ctx.globalCompositeOperation = 'destination-in';
+      layer.ctx.drawImage(layer.mask.canvas, 0, 0);
+      layer.ctx.restore();
+    }
   }
   layer.mask = null;
   if (doc.activeLayerId === id) state.activeTarget = 'layer';
@@ -183,7 +268,7 @@ export function toggleLayerMask(id) {
 // targeting an enabled mask, else the layer's own pixel ctx.
 export function getPaintTarget() {
   const layer = getActiveLayer();
-  if (!layer || layer.type === 'adjustment') return null;
+  if (!layer || layer.type === 'adjustment' || layer.type === 'smart') return null;
   if (state.activeTarget === 'mask' && layer.mask && layer.mask.enabled) {
     return { layer, ctx: layer.mask.ctx, isMask: true };
   }
@@ -223,6 +308,18 @@ export function duplicateLayer(id) {
       opacity: src.opacity,
       blendMode: src.blendMode,
       adjustment: deepCopy(src.adjustment),
+    };
+  } else if (src.type === 'smart') {
+    copy = {
+      id: `layer-${nextLayerId++}`,
+      type: 'smart',
+      name: `${src.name} copy`,
+      visible: src.visible,
+      opacity: src.opacity,
+      blendMode: src.blendMode,
+      source: cloneCanvas(src.source),
+      transform: deepCopy(src.transform),
+      mask: src.mask ? cloneMask(src.mask) : null,
     };
   } else {
     copy = makeLayer(`${src.name} copy`, doc.width, doc.height);
@@ -289,6 +386,10 @@ export function mergeDown(id) {
   const lower = doc.layers[idx - 1];
   if (upper.type === 'adjustment' || lower.type === 'adjustment') {
     emit('status:message', { text: 'Adjustment layers cannot be merged' });
+    return;
+  }
+  if (upper.type === 'smart' || lower.type === 'smart') {
+    emit('status:message', { text: 'Smart layers cannot be merged — rasterize first' });
     return;
   }
   history.push('Merge Down');

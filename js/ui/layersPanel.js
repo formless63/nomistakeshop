@@ -237,7 +237,10 @@ export function initLayersPanel() {
       // Double-click on the row body (not the name) opens the edit dialog.
       row.addEventListener('dblclick', () => editAdjustment(layer));
     } else {
-      const thumb = makeThumb('layer-thumb', layer.canvas, 'Layer content — click to edit pixels');
+      // Smart layers have no doc-size canvas — thumbnail their pristine source.
+      const isSmart = layer.type === 'smart';
+      const thumbSrc = isSmart ? layer.source : layer.canvas;
+      const thumb = makeThumb('layer-thumb', thumbSrc, 'Layer content — click to edit pixels');
       thumb.classList.toggle('target-active', isActive && state.activeTarget !== 'mask');
       thumb.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -246,6 +249,11 @@ export function initLayersPanel() {
       });
       const entry = { layer: thumb, mask: null };
       row.append(eye, thumb);
+      if (isSmart) {
+        const badge = el('span', 'layer-smart-badge', '✦');
+        badge.title = 'Smart layer — transforms are non-destructive';
+        row.append(badge);
+      }
       if (layer.mask) {
         const maskThumb = makeThumb('layer-thumb mask-thumb', layer.mask.canvas, 'Layer mask — click to edit mask');
         maskThumb.classList.toggle('target-active', isActive && state.activeTarget === 'mask');
@@ -297,8 +305,9 @@ export function initLayersPanel() {
     const redraw = (id) => {
       const entry = thumbs.get(id);
       const layer = docModel.layers.find((l) => l.id === id);
-      if (!entry || !layer || layer.type !== 'pixel') return;
-      if (entry.layer) drawThumb(entry.layer, layer.canvas);
+      if (!entry || !layer || layer.type === 'adjustment') return;
+      const src = layer.type === 'smart' ? layer.source : layer.canvas;
+      if (entry.layer && src) drawThumb(entry.layer, src);
       if (entry.mask && layer.mask) drawThumb(entry.mask, layer.mask.canvas);
     };
     if (payload && payload.layerId) {

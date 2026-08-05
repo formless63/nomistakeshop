@@ -70,7 +70,10 @@ export default {
 
   onPointerDown(pt) {
     const layer = getActiveLayer();
-    if (!layer) return;
+    if (!layer || layer.type !== 'pixel') {
+      emit('status:message', { text: 'Select a pixel layer' });
+      return;
+    }
     snapshot = cloneCanvas(layer.canvas);
     start = { ...pt };
     drawShape(layer, start, pt);

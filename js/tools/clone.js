@@ -57,7 +57,7 @@ function opts() {
 
 function activePixelLayer() {
   const layer = getActiveLayer();
-  if (!layer || layer.type === 'adjustment') return null;
+  if (!layer || layer.type !== 'pixel') return null;
   return layer;
 }
 

@@ -7,6 +7,8 @@
 // v2: snapshots round-trip BOTH layer kinds — pixel layers (cloned canvas,
 // cloned mask canvas + enabled flag) and adjustment layers (deep-copied
 // adjustment object). Restore rebuilds ctx objects for both.
+// v5: smart layers round-trip too — cloned source canvas, JSON-deep-copied
+// transform, mask exactly like pixel layers.
 
 import { state, emit } from './state.js';
 import { cloneCanvas, docColorSpace } from './canvasUtils.js';
@@ -84,6 +86,10 @@ export class SnapshotStack {
 
 // --- Thin DOM wrappers: snapshot/restore the current document ---
 
+function snapshotMask(mask) {
+  return mask ? { canvas: cloneCanvas(mask.canvas), enabled: mask.enabled } : null;
+}
+
 function snapshotLayer(l) {
   const base = {
     id: l.id,
@@ -96,10 +102,28 @@ function snapshotLayer(l) {
   if (base.type === 'adjustment') {
     return { ...base, adjustment: l.adjustment ? JSON.parse(JSON.stringify(l.adjustment)) : null };
   }
+  if (base.type === 'smart') {
+    return {
+      ...base,
+      source: cloneCanvas(l.source),
+      transform: l.transform ? JSON.parse(JSON.stringify(l.transform)) : null,
+      mask: snapshotMask(l.mask),
+    };
+  }
   return {
     ...base,
     canvas: cloneCanvas(l.canvas),
-    mask: l.mask ? { canvas: cloneCanvas(l.mask.canvas), enabled: l.mask.enabled } : null,
+    mask: snapshotMask(l.mask),
+  };
+}
+
+function restoreMask(sMask) {
+  if (!sMask) return null;
+  const maskCanvas = cloneCanvas(sMask.canvas);
+  return {
+    canvas: maskCanvas,
+    ctx: maskCanvas.getContext('2d', { willReadFrequently: true, colorSpace: docColorSpace() }),
+    enabled: sMask.enabled,
   };
 }
 
@@ -115,18 +139,17 @@ function restoreLayer(s) {
   if (base.type === 'adjustment') {
     return { ...base, adjustment: s.adjustment ? JSON.parse(JSON.stringify(s.adjustment)) : null };
   }
-  const canvas = cloneCanvas(s.canvas); // clone again: snapshot stays immutable
-  const ctx = canvas.getContext('2d', { willReadFrequently: true, colorSpace: docColorSpace() });
-  let mask = null;
-  if (s.mask) {
-    const maskCanvas = cloneCanvas(s.mask.canvas);
-    mask = {
-      canvas: maskCanvas,
-      ctx: maskCanvas.getContext('2d', { willReadFrequently: true, colorSpace: docColorSpace() }),
-      enabled: s.mask.enabled,
+  if (base.type === 'smart') {
+    return {
+      ...base,
+      source: cloneCanvas(s.source), // clone again: snapshot stays immutable
+      transform: s.transform ? JSON.parse(JSON.stringify(s.transform)) : null,
+      mask: restoreMask(s.mask),
     };
   }
-  return { ...base, canvas, ctx, mask };
+  const canvas = cloneCanvas(s.canvas); // clone again: snapshot stays immutable
+  const ctx = canvas.getContext('2d', { willReadFrequently: true, colorSpace: docColorSpace() });
+  return { ...base, canvas, ctx, mask: restoreMask(s.mask) };
 }
 
 function snapshotDoc() {

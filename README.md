@@ -29,6 +29,9 @@ Any static file server works (`npx http-server`, nginx, …). Opening
   (click the mask thumbnail), enable/disable, apply or delete
 - **Adjustment layers** — non-destructive filters applied to everything
   below (nearly every filter supported), re-editable any time
+- **Smart layers** — non-destructive scale/rotate/move: pristine source is
+  kept, transforms are cumulative and lossless (scale down, scale back up,
+  zero quality loss), rasterize or PSD-export anytime
 - **Tools** — move, rect + ellipse select, lasso, magic wand (tolerance,
   contiguous), crop, eyedropper, brush (size/hardness/opacity), eraser,
   clone stamp (aligned/non-aligned), dodge/burn (shadows/midtones/highlights),
@@ -88,9 +91,10 @@ clipboard, autosave) · `js/ui` · `vendor/` (FOSS libs, lazy-loaded) ·
 ## Roadmap
 
 - **CMYK soft-proofing** via a LittleCMS WASM build — print-prep preview
-- **Smart layers** — non-destructive scale/rotate via the composite pipeline
 - **Selection edge refinement** — marching-squares outlines, anti-aliased
   wand edges
+- **AI background removal** — pending permissively-licensed model weights
+  (MODNet/U²-Net via onnxruntime-web; img.ly's library is AGPL, rejected)
 
 ## External tools
 

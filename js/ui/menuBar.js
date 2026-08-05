@@ -35,6 +35,12 @@ function activePixelLayer() {
   return layer && layer.type === 'pixel' ? layer : null;
 }
 
+// Active layer when it is a smart layer, else null.
+function activeSmartLayer() {
+  const layer = doc.getActiveLayer();
+  return layer && layer.type === 'smart' ? layer : null;
+}
+
 // Default params for a new adjustment layer of the given FILTER_LIST entry.
 function defaultAdjustmentParams(entry) {
   if (entry.custom === 'levels') {
@@ -232,8 +238,16 @@ function buildMenus() {
         { label: 'Merge Down', action: () => doc.mergeDown(activeLayerId()) },
         { label: 'Flatten Image…', action: () => flattenDocument() },
         { separator: true },
-        { label: 'Flip Layer H', action: () => transform.flipLayerHorizontal(activeLayerId()) },
-        { label: 'Flip Layer V', action: () => transform.flipLayerVertical(activeLayerId()) },
+        {
+          label: 'Flip Layer H',
+          disabled: () => !activePixelLayer(),
+          action: () => transform.flipLayerHorizontal(activeLayerId()),
+        },
+        {
+          label: 'Flip Layer V',
+          disabled: () => !activePixelLayer(),
+          action: () => transform.flipLayerVertical(activeLayerId()),
+        },
         { separator: true },
         {
           label: 'Add Layer Mask (White)',
@@ -270,8 +284,19 @@ function buildMenus() {
         },
         { separator: true },
         {
-          label: 'Transform Layer…',
+          label: 'Convert to Smart Layer',
           disabled: () => !activePixelLayer(),
+          action: () => doc.convertToSmartLayer(activeLayerId()),
+        },
+        {
+          label: 'Rasterize Smart Layer',
+          disabled: () => !activeSmartLayer(),
+          action: () => doc.rasterizeSmartLayer(activeLayerId()),
+        },
+        { separator: true },
+        {
+          label: 'Transform Layer…',
+          disabled: () => !activePixelLayer() && !activeSmartLayer(),
           action() {
             dialogs.transformLayerDialog().then((v) => {
               if (v) transform.transformActiveLayer(v);

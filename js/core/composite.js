@@ -8,6 +8,9 @@
 //   mask, 'destination-in' the mask (mask ALPHA = visibility); then draw the
 //   temp canvas onto the composite with globalAlpha=opacity and
 //   globalCompositeOperation=blendMode.
+// - smart layer: render layer.source through layer.transform
+//   (renderSmartLayer), then follow the exact pixel-layer path — mask
+//   'destination-in' + opacity/blendMode compositing.
 // - adjustment layer: run its filter on an ImageData copy of the composite so
 //   far; opacity lerps filtered/unfiltered per pixel; a non-normal blendMode
 //   draws the filtered result through a temp canvas with that composite op,
@@ -83,6 +86,42 @@ function applyAdjustmentLayer(ctx, width, height, layer) {
   }
 }
 
+// Render a smart layer's pristine source through its transform onto a fresh
+// w×h canvas. Center-based: translate to (doc center + offset), rotate, scale,
+// then draw the source centered. Identity transform + doc-sized source renders
+// byte-identical to the source (translate(w/2,h/2) + drawImage(-sw/2,-sh/2)
+// lands exactly on integer device pixels when w==sw and h==sh).
+export function renderSmartLayer(layer, w, h) {
+  const { canvas, ctx } = createCanvas(w, h);
+  const t = layer.transform || { scaleX: 1, scaleY: 1, rotateDeg: 0, offsetX: 0, offsetY: 0 };
+  ctx.translate(w / 2 + t.offsetX, h / 2 + t.offsetY);
+  ctx.rotate((t.rotateDeg * Math.PI) / 180);
+  ctx.scale(t.scaleX, t.scaleY);
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(layer.source, -layer.source.width / 2, -layer.source.height / 2);
+  return canvas;
+}
+
+// Shared pixel-compositing step for pixel and smart layers: draw the content
+// canvas into a temp canvas, apply the mask (destination-in), then composite
+// the temp onto `ctx` with globalAlpha=opacity and
+// globalCompositeOperation=blendMode.
+function compositeContent(ctx, width, height, layer, contentCanvas) {
+  const temp = createCanvas(width, height);
+  temp.ctx.drawImage(contentCanvas, 0, 0);
+  if (layer.mask && layer.mask.enabled) {
+    temp.ctx.save();
+    temp.ctx.globalCompositeOperation = 'destination-in';
+    temp.ctx.drawImage(layer.mask.canvas, 0, 0);
+    temp.ctx.restore();
+  }
+  ctx.save();
+  ctx.globalAlpha = layer.opacity;
+  ctx.globalCompositeOperation = layer.blendMode;
+  ctx.drawImage(temp.canvas, 0, 0);
+  ctx.restore();
+}
+
 export function compositeLayers(width, height, layers, upToIndex = layers.length - 1) {
   const { canvas, ctx } = createCanvas(width, height);
   const last = Math.min(upToIndex, layers.length - 1);
@@ -95,20 +134,13 @@ export function compositeLayers(width, height, layers, upToIndex = layers.length
       continue;
     }
 
-    // Pixel layer (v1 layers may not carry an explicit .type).
-    const temp = createCanvas(width, height);
-    temp.ctx.drawImage(layer.canvas, 0, 0);
-    if (layer.mask && layer.mask.enabled) {
-      temp.ctx.save();
-      temp.ctx.globalCompositeOperation = 'destination-in';
-      temp.ctx.drawImage(layer.mask.canvas, 0, 0);
-      temp.ctx.restore();
+    if (layer.type === 'smart') {
+      compositeContent(ctx, width, height, layer, renderSmartLayer(layer, width, height));
+      continue;
     }
-    ctx.save();
-    ctx.globalAlpha = layer.opacity;
-    ctx.globalCompositeOperation = layer.blendMode;
-    ctx.drawImage(temp.canvas, 0, 0);
-    ctx.restore();
+
+    // Pixel layer (v1 layers may not carry an explicit .type).
+    compositeContent(ctx, width, height, layer, layer.canvas);
   }
   return canvas;
 }

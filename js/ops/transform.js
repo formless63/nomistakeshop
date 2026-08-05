@@ -5,6 +5,7 @@
 import { state, emit, setSelection } from '../core/state.js';
 import { history } from '../core/history.js';
 import { createCanvas } from '../core/canvasUtils.js';
+import { smartLayerToPixel, setSmartTransform } from '../core/document.js';
 
 function getDoc() {
   return state.doc || null;
@@ -22,7 +23,21 @@ function emitDocChanged() {
 
 // Rebuild every pixel layer's canvas (and mask, if any) at (newW, newH)
 // via drawFn(ctx, oldCanvas). Adjustment layers carry no pixels — skipped.
-function rebuildLayers(doc, newW, newH, drawFn) {
+// Smart layers are RASTERIZED first (same in-place swap as
+// rasterizeSmartLayer, but without per-layer history pushes — the calling
+// op's single history.push covers it); one status message reports the count.
+function rebuildLayers(doc, newW, newH, drawFn, opLabel) {
+  let rasterized = 0;
+  for (let i = 0; i < doc.layers.length; i++) {
+    const layer = doc.layers[i];
+    if (layer && layer.type === 'smart') {
+      smartLayerToPixel(doc, layer);
+      rasterized++;
+    }
+  }
+  if (rasterized > 0) {
+    emit('status:message', { text: `${rasterized} smart layer(s) rasterized by ${opLabel}` });
+  }
   for (const layer of doc.layers) {
     if (layer.type === 'adjustment') continue;
     const { canvas, ctx } = createCanvas(newW, newH);
@@ -42,7 +57,8 @@ export function rotate90(dir) {
   const doc = getDoc();
   if (!doc) return;
   const cw = dir >= 0; // 1 = CW, -1 = CCW
-  history.push(cw ? 'Rotate 90° CW' : 'Rotate 90° CCW');
+  const label = cw ? 'Rotate 90° CW' : 'Rotate 90° CCW';
+  history.push(label);
   const newW = doc.height;
   const newH = doc.width;
   rebuildLayers(doc, newW, newH, (ctx, old) => {
@@ -54,7 +70,7 @@ export function rotate90(dir) {
       ctx.rotate(-Math.PI / 2);
     }
     ctx.drawImage(old, 0, 0);
-  });
+  }, label);
   doc.width = newW;
   doc.height = newH;
   setSelection(null);
@@ -69,7 +85,7 @@ export function rotate180() {
     ctx.translate(doc.width, doc.height);
     ctx.rotate(Math.PI);
     ctx.drawImage(old, 0, 0);
-  });
+  }, 'Rotate 180°');
   emitDocChanged();
 }
 
@@ -81,7 +97,7 @@ export function flipCanvasHorizontal() {
     ctx.translate(doc.width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(old, 0, 0);
-  });
+  }, 'Flip Canvas Horizontal');
   emitDocChanged();
 }
 
@@ -93,7 +109,7 @@ export function flipCanvasVertical() {
     ctx.translate(0, doc.height);
     ctx.scale(1, -1);
     ctx.drawImage(old, 0, 0);
-  });
+  }, 'Flip Canvas Vertical');
   emitDocChanged();
 }
 
@@ -102,6 +118,11 @@ function flipLayer(id, horizontal) {
   if (!doc) return;
   const layer = doc.layers.find((l) => l.id === id);
   if (!layer || layer.type === 'adjustment') return;
+  if (layer.type === 'smart') {
+    // Smart layers carry no pixel canvas — rasterize (or transform) first.
+    emit('status:message', { text: 'Smart layers cannot be flipped — rasterize first' });
+    return;
+  }
   history.push(horizontal ? 'Flip Layer Horizontal' : 'Flip Layer Vertical');
   const flipCanvasInPlace = (canvas, ctx) => {
     const w = canvas.width;
@@ -144,7 +165,7 @@ export function resizeImage(newW, newH) {
   rebuildLayers(doc, w, h, (ctx, old) => {
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(old, 0, 0, w, h);
-  });
+  }, 'Image Size');
   doc.width = w;
   doc.height = h;
   setSelection(null);
@@ -172,7 +193,7 @@ export function resizeCanvas(newW, newH, anchor = 'center') {
   const dy = anchorOffset(anchor, doc.height, h, false);
   rebuildLayers(doc, w, h, (ctx, old) => {
     ctx.drawImage(old, dx, dy);
-  });
+  }, 'Canvas Size');
   doc.width = w;
   doc.height = h;
   setSelection(null);
@@ -192,14 +213,17 @@ export function cropToRect(rect) {
   history.push('Crop');
   rebuildLayers(doc, w, h, (ctx, old) => {
     ctx.drawImage(old, x0, y0, w, h, 0, 0, w, h);
-  });
+  }, 'Crop');
   doc.width = w;
   doc.height = h;
   setSelection(null);
   emitDocChanged();
 }
 
-// Scale/rotate the active pixel layer in place (doc size unchanged).
+// Scale/rotate the active layer (doc size unchanged).
+// Smart layers: non-destructive — the transform accumulates (multiplicative
+// scale, additive rotate) and the pristine source is re-rendered, so quality
+// never degrades. Pixel layers: destructive in-place redraw as before.
 export function transformActiveLayer({ scaleXPct = 100, scaleYPct = 100, rotateDeg = 0 } = {}) {
   const doc = getDoc();
   if (!doc) return;
@@ -207,10 +231,20 @@ export function transformActiveLayer({ scaleXPct = 100, scaleYPct = 100, rotateD
   if (!layer || layer.type === 'adjustment') return;
   const sx = Number(scaleXPct) / 100;
   const sy = Number(scaleYPct) / 100;
-  const rad = (Number(rotateDeg) || 0) * (Math.PI / 180);
+  const deg = Number(rotateDeg) || 0;
+  const rad = deg * (Math.PI / 180);
   if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0) return;
   if (sx === 1 && sy === 1 && rad === 0) return; // identity — no-op
   history.push('Transform Layer');
+  if (layer.type === 'smart') {
+    const cur = layer.transform;
+    setSmartTransform(layer.id, {
+      scaleX: cur.scaleX * sx,
+      scaleY: cur.scaleY * sy,
+      rotateDeg: cur.rotateDeg + deg,
+    });
+    return;
+  }
   const transformInPlace = (canvas, ctx) => {
     const w = canvas.width;
     const h = canvas.height;

@@ -24,7 +24,10 @@ export default {
 
   async onPointerDown(pt) {
     const layer = getActiveLayer();
-    if (!layer) return;
+    if (!layer || layer.type !== 'pixel') {
+      emit('status:message', { text: 'Select a pixel layer' });
+      return;
+    }
     const size = getToolOption('text', 'fontSize', 48);
     const font = getToolOption('text', 'fontFamily', 'Arial');
     const dialogs = await import('../ui/dialogs.js');

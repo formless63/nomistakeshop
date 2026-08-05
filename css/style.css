@@ -750,6 +750,14 @@ input[type="range"]::-moz-range-thumb:hover {
 
 /* ---------- Layers panel v2: adjustment icon, mask thumb, Adj popup ---------- */
 
+.layer-smart-badge {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--accent, #4c8dff);
+}
+
 .layer-adjust-icon {
   flex: none;
   width: 48px;

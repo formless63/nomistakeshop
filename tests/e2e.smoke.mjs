@@ -1074,6 +1074,273 @@ async function main() {
     await freshDoc(); // back to srgb 1280x800 for cleanliness
   });
 
+  // Check 36: THE lossless guarantee — converting to a smart layer keeps the
+  // render byte-identical; scale 0.25 shrinks it (~16x fewer red px); back to
+  // identity restores the ORIGINAL flatten byte-for-byte and the pristine
+  // source is never touched.
+  await check('36. Smart layer: lossless convert, scale 0.25, byte-exact restore', async () => {
+    await freshDoc();
+    // Pattern: 100x100 red square + a green->blue gradient strip.
+    const origRed = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      layer.ctx.fillStyle = '#ff0000';
+      layer.ctx.fillRect(100, 100, 100, 100);
+      const grad = layer.ctx.createLinearGradient(400, 100, 700, 100);
+      grad.addColorStop(0, '#00ff00');
+      grad.addColorStop(1, '#0000ff');
+      layer.ctx.fillStyle = grad;
+      layer.ctx.fillRect(400, 100, 300, 100);
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      window.__c36 = {
+        flat: new Uint8ClampedArray(d),
+        layerPx: new Uint8ClampedArray(layer.ctx.getImageData(0, 0, doc.width, doc.height).data),
+      };
+      let red = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] > 200 && d[i + 1] < 80 && d[i + 2] < 80) red++;
+      }
+      return red;
+    });
+    assert.equal(origRed, 10000, `expected 10000 red px in the pattern, got ${origRed}`);
+
+    await clickMenu('Layer', 'Convert to Smart Layer');
+    const afterConvert = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const layer = docMod.getActiveLayer();
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      const ref = window.__c36.flat;
+      let diff = 0;
+      for (let i = 0; i < d.length; i++) if (d[i] !== ref[i]) diff++;
+      return { type: layer.type, transform: layer.transform, diff };
+    });
+    assert.equal(afterConvert.type, 'smart', `active layer is ${afterConvert.type}, not smart`);
+    assert.deepEqual(afterConvert.transform,
+      { scaleX: 1, scaleY: 1, rotateDeg: 0, offsetX: 0, offsetY: 0 },
+      'fresh smart layer does not have an identity transform');
+    assert.equal(afterConvert.diff, 0, `render changed on convert: ${afterConvert.diff} bytes differ`);
+
+    const scaledRed = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const layer = docMod.getActiveLayer();
+      docMod.setSmartTransform(layer.id, { scaleX: 0.25, scaleY: 0.25 });
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      let red = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] > 200 && d[i + 1] < 80 && d[i + 2] < 80) red++;
+      }
+      return red;
+    });
+    assert.ok(scaledRed > 0 && scaledRed <= origRed / 8,
+      `scale 0.25 should cut red px ~16x: ${origRed} -> ${scaledRed}`);
+
+    const restored = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const layer = docMod.getActiveLayer();
+      docMod.setSmartTransform(layer.id, { scaleX: 1, scaleY: 1, rotateDeg: 0, offsetX: 0, offsetY: 0 });
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      const ref = window.__c36.flat;
+      let flatDiff = 0;
+      for (let i = 0; i < d.length; i++) if (d[i] !== ref[i]) flatDiff++;
+      const sctx = layer.source.getContext('2d');
+      const sd = sctx.getImageData(0, 0, layer.source.width, layer.source.height).data;
+      const lp = window.__c36.layerPx;
+      let srcDiff = 0;
+      for (let i = 0; i < sd.length; i++) if (sd[i] !== lp[i]) srcDiff++;
+      return { flatDiff, srcDiff };
+    });
+    assert.equal(restored.flatDiff, 0,
+      `identity re-render not byte-identical to the original: ${restored.flatDiff} bytes differ`);
+    assert.equal(restored.srcDiff, 0, `smart source mutated: ${restored.srcDiff} bytes differ`);
+  });
+
+  // Check 37: move tool drags the smart layer's transform offsets
+  // (non-destructive); Ctrl+Z zeroes the offsets and restores the render.
+  await check('37. Move tool drags smart-layer offsets; undo restores', async () => {
+    await key('KeyV');
+    assert.equal(await ev(() => window.__nms.state.activeTool), 'move');
+    await dragDoc(150, 150, 190, 175); // +40,+25 doc px, grabbed inside the red square
+    const moved = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const layer = docMod.getActiveLayer();
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      const isRed = (x, y) => {
+        const i = (y * flat.width + x) * 4;
+        return d[i] > 200 && d[i + 1] < 80 && d[i + 2] < 80;
+      };
+      let atNew = 0; // the shifted square rect (140..240, 125..225)
+      for (let y = 125; y < 225; y++) for (let x = 140; x < 240; x++) if (isRed(x, y)) atNew++;
+      let atOld = 0; // strip covered only before the move (100..140, 100..125)
+      for (let y = 100; y < 125; y++) for (let x = 100; x < 140; x++) if (isRed(x, y)) atOld++;
+      return { ox: layer.transform.offsetX, oy: layer.transform.offsetY, atNew, atOld };
+    });
+    assert.ok(Math.abs(moved.ox - 40) <= 1 && Math.abs(moved.oy - 25) <= 1,
+      `offsets ${moved.ox},${moved.oy} not ~40,25`);
+    assert.equal(moved.atNew, 10000, `red square not at the moved position: ${moved.atNew} red px`);
+    assert.equal(moved.atOld, 0, `red pixels left behind at the old position: ${moved.atOld}`);
+    await undo();
+    const reverted = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const layer = docMod.getActiveLayer();
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      const ref = window.__c36.flat;
+      let diff = 0;
+      for (let i = 0; i < d.length; i++) if (d[i] !== ref[i]) diff++;
+      return { ox: layer.transform.offsetX, oy: layer.transform.offsetY, diff };
+    });
+    assert.deepEqual({ ox: reverted.ox, oy: reverted.oy }, { ox: 0, oy: 0 },
+      'undo did not zero the offsets');
+    assert.equal(reverted.diff, 0, `render not restored after undo: ${reverted.diff} bytes differ`);
+  });
+
+  // Check 38: Transform Layer… dialog on a smart layer is cumulative and
+  // lossless — 50% shrinks the render, then 200% restores it byte-for-byte
+  // through the real UI path.
+  await check('38. Transform dialog: 50% then 200% restores byte-exact render', async () => {
+    const setScale = async (pct) => {
+      await clickMenu('Layer', 'Transform Layer');
+      await waitDialog();
+      await ev((p) => {
+        const inputs = document.querySelectorAll('.dialog-overlay input[type="number"]');
+        if (inputs.length < 2) throw new Error(`transform dialog has ${inputs.length} number inputs`);
+        inputs[0].value = String(p); // Scale X %
+        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+        inputs[1].value = String(p); // Scale Y %
+        inputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+      }, pct);
+      await confirmDialog();
+    };
+    await setScale(50);
+    const shrunk = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const layer = docMod.getActiveLayer();
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      let red = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] > 200 && d[i + 1] < 80 && d[i + 2] < 80) red++;
+      }
+      return { sx: layer.transform.scaleX, sy: layer.transform.scaleY, red };
+    });
+    assert.deepEqual({ sx: shrunk.sx, sy: shrunk.sy }, { sx: 0.5, sy: 0.5 },
+      'dialog did not set a 50% scale');
+    assert.ok(shrunk.red > 0 && shrunk.red <= 10000 / 2,
+      `50% scale should cut red px ~4x: 10000 -> ${shrunk.red}`);
+    await setScale(200);
+    const back = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const layer = docMod.getActiveLayer();
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      const ref = window.__c36.flat;
+      let diff = 0;
+      for (let i = 0; i < d.length; i++) if (d[i] !== ref[i]) diff++;
+      return { sx: layer.transform.scaleX, sy: layer.transform.scaleY, diff };
+    });
+    assert.deepEqual({ sx: back.sx, sy: back.sy }, { sx: 1, sy: 1 },
+      'cumulative 50% then 200% did not return to scale 1');
+    assert.equal(back.diff, 0,
+      `render not byte-identical after 50%+200%: ${back.diff} bytes differ`);
+  });
+
+  // Check 39: project round trip preserves the smart layer — type, transform,
+  // and the rendered pixels — at a non-identity transform.
+  await check('39. Project round trip keeps smart layer + transform + render', async () => {
+    const saved = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const layer = docMod.getActiveLayer();
+      docMod.setSmartTransform(layer.id, { scaleX: 0.5, scaleY: 0.5, offsetX: 30, offsetY: -20 });
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      window.__c39 = { flat: new Uint8ClampedArray(d) };
+      return window.__nms.io.serializeProject();
+    });
+    const smartEntries = saved.layers.filter((l) => l.type === 'smart');
+    assert.equal(smartEntries.length, 1, `expected 1 smart layer in project, got ${smartEntries.length}`);
+    assert.deepEqual(smartEntries[0].transform,
+      { scaleX: 0.5, scaleY: 0.5, rotateDeg: 0, offsetX: 30, offsetY: -20 },
+      'serialized transform mismatch');
+    await ev(() => {
+      window.__nms.createDocument(64, 64, '#ffffff'); // wipe the doc entirely
+      window.__nms.renderer.fitToScreen();
+    });
+    const loaded = await ev(async (data) => {
+      const ok = await window.__nms.io.loadProjectData(data);
+      const doc = window.__nms.state.doc;
+      const smart = doc.layers.find((l) => l.type === 'smart');
+      const docMod = await import('/js/core/document.js');
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      const ref = window.__c39.flat;
+      let diff = 0;
+      for (let i = 0; i < d.length; i++) if (d[i] !== ref[i]) diff++;
+      return {
+        ok,
+        w: doc.width,
+        h: doc.height,
+        smart: smart ? { transform: smart.transform } : null,
+        diff,
+      };
+    }, saved);
+    assert.equal(loaded.ok, true, 'loadProjectData rejected the saved project');
+    assert.deepEqual({ w: loaded.w, h: loaded.h }, { w: 1280, h: 800 }, 'doc size not restored');
+    assert.ok(loaded.smart, 'no smart layer after project load');
+    assert.deepEqual(loaded.smart.transform,
+      { scaleX: 0.5, scaleY: 0.5, rotateDeg: 0, offsetX: 30, offsetY: -20 },
+      'transform not intact after load');
+    assert.equal(loaded.diff, 0, `render differs after round trip: ${loaded.diff} bytes differ`);
+  });
+
+  // Check 40: rasterizing the smart layer keeps the render byte-identical,
+  // and the doc then exports to a PSD that parses via the vendored readPsd
+  // with the expected layer count.
+  await check('40. Rasterize keeps render; Export PSD parses with doc layer count', async () => {
+    await clickMenu('Layer', 'Rasterize Smart Layer');
+    const rast = await ev(async () => {
+      const docMod = await import('/js/core/document.js');
+      const layer = docMod.getActiveLayer();
+      const flat = docMod.flattenImage();
+      const d = flat.getContext('2d').getImageData(0, 0, flat.width, flat.height).data;
+      const ref = window.__c39.flat;
+      let diff = 0;
+      for (let i = 0; i < d.length; i++) if (d[i] !== ref[i]) diff++;
+      return { type: layer.type, diff, layers: window.__nms.state.doc.layers.length };
+    });
+    assert.equal(rast.type, 'pixel', `rasterized layer is ${rast.type}, not pixel`);
+    assert.equal(rast.diff, 0, `render changed on rasterize: ${rast.diff} bytes differ`);
+
+    await ev(() => {
+      window.__capHref = null;
+      HTMLAnchorElement.prototype.__origClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () { window.__capHref = this.href; };
+    });
+    try {
+      await clickMenu('File', 'Export PSD');
+      await page.waitForFunction(() => !!window.__capHref, { timeout: 30000 });
+    } finally {
+      await ev(() => {
+        HTMLAnchorElement.prototype.click = HTMLAnchorElement.prototype.__origClick;
+        delete HTMLAnchorElement.prototype.__origClick;
+      });
+    }
+    const psd = await ev(async () => {
+      const buf = await (await fetch(window.__capHref)).arrayBuffer();
+      const { readPsd } = await import('/vendor/ag-psd/index.js');
+      const back = readPsd(buf);
+      return { w: back.width, h: back.height, names: (back.children || []).map((c) => c.name) };
+    });
+    assert.equal(psd.names.length, rast.layers,
+      `PSD layer count ${psd.names.length} != doc layer count ${rast.layers}`);
+    assert.deepEqual({ w: psd.w, h: psd.h }, { w: 1280, h: 800 }, 'PSD dimensions mismatch');
+  });
+
   // Check 1 (asserted last): zero console errors / pageerrors across the run.
   await check('1. Zero console errors and zero pageerrors', async () => {
     assert.deepEqual(pageErrors, [], `pageerrors:\n${pageErrors.join('\n')}`);

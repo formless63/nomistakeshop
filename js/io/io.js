@@ -268,8 +268,9 @@ export const io = {
   },
 
   // Serialize the current document to a plain JSON-safe object.
-  // Handles both v2 layer kinds: pixel layers carry png/maskPng dataURLs,
-  // adjustment layers carry their {filterId, params} adjustment.
+  // Handles all layer kinds: pixel layers carry png/maskPng dataURLs,
+  // adjustment layers carry their {filterId, params} adjustment, smart
+  // layers carry sourcePng + their re-editable transform.
   serializeProject() {
     const doc = state.doc;
     if (!doc) return null;
@@ -294,6 +295,19 @@ export const io = {
                 ? layer.adjustment.params
                 : JSON.parse(JSON.stringify(layer.adjustment.params)),
             },
+          };
+        }
+        if (layer.type === 'smart') {
+          return {
+            type: 'smart',
+            name: layer.name,
+            visible: layer.visible,
+            opacity: layer.opacity,
+            blendMode: layer.blendMode,
+            sourcePng: layer.source.toDataURL('image/png'),
+            transform: { ...layer.transform },
+            maskPng: layer.mask ? layer.mask.canvas.toDataURL('image/png') : null,
+            maskEnabled: layer.mask ? layer.mask.enabled : undefined,
           };
         }
         return {
@@ -361,6 +375,23 @@ export const io = {
           if (!adj || typeof adj.filterId !== 'string') return null;
           return { entry };
         }
+        if (entry.type === 'smart') {
+          if (typeof entry.sourcePng !== 'string') return null;
+          try {
+            const img = await loadDataURLImage(entry.sourcePng);
+            let maskImg = null;
+            if (typeof entry.maskPng === 'string') {
+              try {
+                maskImg = await loadDataURLImage(entry.maskPng);
+              } catch {
+                maskImg = null; // a broken mask must not sink the whole layer
+              }
+            }
+            return { entry, img, maskImg };
+          } catch {
+            return null;
+          }
+        }
         // Pixel layer (a missing type means a v1-format pixel entry).
         if (typeof entry.png !== 'string') return null;
         try {
@@ -402,6 +433,38 @@ export const io = {
         layer.visible = entry.visible !== false;
         layer.opacity = clamp(typeof entry.opacity === 'number' ? entry.opacity : 1, 0, 1);
         layer.blendMode = typeof entry.blendMode === 'string' ? entry.blendMode : 'source-over';
+        layers.push(layer);
+      } else if (entry.type === 'smart') {
+        // makeLayer provides the id + defaults; the pixel shell is then
+        // repurposed as a smart layer (source canvas adopted, canvas/ctx dropped).
+        const layer = makeLayer(
+          typeof entry.name === 'string' ? entry.name : 'Layer',
+          doc.width,
+          doc.height,
+        );
+        layer.visible = entry.visible !== false;
+        layer.opacity = clamp(typeof entry.opacity === 'number' ? entry.opacity : 1, 0, 1);
+        layer.blendMode = typeof entry.blendMode === 'string' ? entry.blendMode : 'source-over';
+        const source = createCanvas(item.img.width, item.img.height);
+        source.ctx.drawImage(item.img, 0, 0);
+        layer.type = 'smart';
+        layer.source = source.canvas;
+        const t = entry.transform && typeof entry.transform === 'object' ? entry.transform : {};
+        const num = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+        layer.transform = {
+          scaleX: num(t.scaleX, 1),
+          scaleY: num(t.scaleY, 1),
+          rotateDeg: num(t.rotateDeg, 0),
+          offsetX: num(t.offsetX, 0),
+          offsetY: num(t.offsetY, 0),
+        };
+        delete layer.canvas;
+        delete layer.ctx;
+        if (item.maskImg) {
+          const mask = createCanvas(doc.width, doc.height);
+          mask.ctx.drawImage(item.maskImg, 0, 0);
+          layer.mask = { canvas: mask.canvas, ctx: mask.ctx, enabled: entry.maskEnabled !== false };
+        }
         layers.push(layer);
       } else {
         const layer = makeLayer(

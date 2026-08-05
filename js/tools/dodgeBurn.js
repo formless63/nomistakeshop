@@ -112,7 +112,7 @@ export default {
 
   onPointerDown(pt) {
     const layer = getActiveLayer();
-    if (!layer || layer.type === 'adjustment') {
+    if (!layer || layer.type !== 'pixel') {
       emit('status:message', { text: 'Select a pixel layer' });
       return;
     }
