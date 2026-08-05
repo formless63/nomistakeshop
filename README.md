@@ -63,3 +63,18 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) and [ARCHITECTURE.v2.md](ARCHITECTURE.v2.
 — the binding module contracts. `js/core` (state/events, document+layers+masks,
 history, compositing, renderer) · `js/tools` · `js/filters` · `js/ops` ·
 `js/io` (files, clipboard, autosave) · `js/ui` · `js/main.js` (boot).
+
+## External tools
+
+The app itself has **zero runtime dependencies** — everything users touch is
+hand-written against browser APIs (Canvas 2D, IndexedDB, Clipboard).
+The magic wand, flood fill, and every filter are our own code, not a library.
+Tooling used to develop and test it:
+
+| Project | License | What we use it for |
+|---|---|---|
+| [Node.js](https://github.com/nodejs/node) | MIT | Runs the unit test runner (`node:test`) and the e2e script |
+| [puppeteer-core](https://github.com/puppeteer/puppeteer) | Apache-2.0 | Drives headless Chrome in the e2e suite (dev dependency) |
+| [Playwright's Chromium build](https://github.com/microsoft/playwright) | Apache-2.0 | Local browser binary the e2e suite runs against |
+| [Python `http.server`](https://github.com/python/cpython) | PSF-2.0 | Local static file server (`npm start`, e2e harness) |
+| [GitHub Actions](https://github.com/actions) | MIT (actions) | CI (unit + e2e on every push) and GitHub Pages deployment |

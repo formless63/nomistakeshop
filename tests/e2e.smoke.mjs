@@ -8,16 +8,50 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const require = createRequire('/home/wicaso/.nvm/versions/node/v25.8.1/lib/node_modules/x.js');
-const puppeteer = require('puppeteer');
-
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// Puppeteer resolution: local devDependency (puppeteer-core, CI) first,
+// then a global puppeteer install (local dev machines).
+function loadPuppeteer() {
+  const localRequire = createRequire(path.join(ROOT, 'package.json'));
+  try {
+    return localRequire('puppeteer-core');
+  } catch { /* not installed locally */ }
+  const globalRoot = process.env.NPM_GLOBAL_ROOT
+    || '/home/wicaso/.nvm/versions/node/v25.8.1/lib/node_modules';
+  const globalRequire = createRequire(path.join(globalRoot, 'x.js'));
+  return globalRequire('puppeteer');
+}
+const puppeteer = loadPuppeteer();
+
+// Chrome resolution: CHROME_PATH env (CI) -> newest playwright cache build
+// (local dev) -> common system locations.
+function findChrome() {
+  if (process.env.CHROME_PATH) return process.env.CHROME_PATH;
+  const cache = `${process.env.HOME}/.cache/ms-playwright`;
+  try {
+    const builds = fs.readdirSync(cache)
+      .filter((d) => /^chromium-\d+$/.test(d)).sort().reverse();
+    for (const b of builds) {
+      for (const sub of ['chrome-linux64/chrome', 'chrome-linux/chrome']) {
+        const p = path.join(cache, b, sub);
+        if (fs.existsSync(p)) return p;
+      }
+    }
+  } catch { /* no playwright cache */ }
+  for (const p of ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']) {
+    if (fs.existsSync(p)) return p;
+  }
+  throw new Error('No Chrome/Chromium found — set CHROME_PATH');
+}
+const CHROME = findChrome();
+
 const PORT = 8123;
 const BASE = `http://127.0.0.1:${PORT}`;
-const CHROME = '/home/wicaso/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome';
 
 // ---------------------------------------------------------------------------
 // Result tracking
