@@ -80,8 +80,6 @@ npm run test:e2e   # headless-Chrome suite (31 end-to-end checks)
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md), [ARCHITECTURE.v2.md](ARCHITECTURE.v2.md)
-and [ARCHITECTURE.v3.md](ARCHITECTURE.v3.md) — the binding module contracts.
 `js/core` (state/events, document+layers+masks, history, compositing,
 renderer) · `js/tools` · `js/filters` · `js/ops` · `js/io` (files, formats,
 clipboard, autosave) · `js/ui` · `vendor/` (FOSS libs, lazy-loaded) ·
