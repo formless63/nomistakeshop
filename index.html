@@ -35,11 +35,14 @@
   <!-- Bottom: status bar (doc size, zoom, cursor position) -->
   <footer id="status-bar"></footer>
 
+  <!-- Mobile drawer backdrop (taps close the side-panel drawer; hidden on desktop) -->
+  <div id="panel-backdrop"></div>
+
   <!-- Modal dialog root (new document, resize, filter params, text input, ...) -->
   <div id="dialog-root"></div>
 
   <!-- Hidden file inputs reused by io.js -->
-  <input type="file" id="file-open-image" accept="image/*" style="display:none" />
+  <input type="file" id="file-open-image" accept="image/*,.psd,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.pef,.srw,.raw,.raf,.x3f" style="display:none" />
   <input type="file" id="file-open-project" accept=".nmsproject,application/json" style="display:none" />
 
   <script type="module" src="js/main.js"></script>

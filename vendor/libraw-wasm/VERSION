@@ -1,0 +1,13 @@
+libraw-wasm 1.6.0
+Upstream: https://github.com/ybouane/LibRaw-Wasm (npm: libraw-wasm@1.6.0)
+Obtained via: npm pack libraw-wasm
+Dist files vendored: dist/index.js (main-thread API, spawns a Web Worker via
+new URL('./worker.js', import.meta.url)), dist/worker.js (self-contained
+Emscripten glue), dist/libraw.wasm (fetched relative to worker.js).
+
+License of the JS wrapper: ISC (see LICENSE; the npm tarball ships no license
+file, text is the standard ISC license with upstream author attribution).
+Bundled LibRaw (compiled to WASM): LGPL-2.1 (LibRaw is dual-licensed
+LGPL-2.1 / CDDL-1.0; we use it under LGPL-2.1, full text in
+LICENSE.LibRaw.LGPL-2.1.txt fetched from https://www.gnu.org/licenses/lgpl-2.1.txt).
+LibRaw upstream: https://www.libraw.org/ — loaded dynamically, unmodified.

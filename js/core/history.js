@@ -9,7 +9,7 @@
 // adjustment object). Restore rebuilds ctx objects for both.
 
 import { state, emit } from './state.js';
-import { cloneCanvas } from './canvasUtils.js';
+import { cloneCanvas, docColorSpace } from './canvasUtils.js';
 
 export class SnapshotStack {
   constructor(limit = 25) {
@@ -116,13 +116,13 @@ function restoreLayer(s) {
     return { ...base, adjustment: s.adjustment ? JSON.parse(JSON.stringify(s.adjustment)) : null };
   }
   const canvas = cloneCanvas(s.canvas); // clone again: snapshot stays immutable
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const ctx = canvas.getContext('2d', { willReadFrequently: true, colorSpace: docColorSpace() });
   let mask = null;
   if (s.mask) {
     const maskCanvas = cloneCanvas(s.mask.canvas);
     mask = {
       canvas: maskCanvas,
-      ctx: maskCanvas.getContext('2d', { willReadFrequently: true }),
+      ctx: maskCanvas.getContext('2d', { willReadFrequently: true, colorSpace: docColorSpace() }),
       enabled: s.mask.enabled,
     };
   }
@@ -136,6 +136,7 @@ function snapshotDoc() {
     width: doc.width,
     height: doc.height,
     background: doc.background,
+    colorSpace: doc.colorSpace || 'srgb',
     activeLayerId: doc.activeLayerId,
     layers: doc.layers.map(snapshotLayer),
   };
@@ -146,6 +147,7 @@ function restoreDoc(snap) {
     width: snap.width,
     height: snap.height,
     background: snap.background,
+    colorSpace: snap.colorSpace || 'srgb',
     layers: snap.layers.map(restoreLayer),
     activeLayerId: snap.activeLayerId,
   };

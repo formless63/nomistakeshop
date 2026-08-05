@@ -1,0 +1,10 @@
+@techstark/opencv-js 5.0.0-release.1 (npm build of OpenCV.js, OpenCV 5.0.0)
+Upstream: https://github.com/opencv/opencv
+npm package: https://www.npmjs.com/package/@techstark/opencv-js
+License: Apache-2.0 (see LICENSE in this directory)
+
+Files:
+- opencv.umd.js — official UMD dist (dist/opencv.js from the npm package);
+  the WASM binary is inlined in this single file (no separate .wasm needed).
+- opencv.js — tiny ESM wrapper: imports the UMD build (which assigns the
+  thenable runtime to window.cv) and re-exports the initialized cv object.

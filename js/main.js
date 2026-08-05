@@ -33,6 +33,7 @@ import { initLayersPanel } from './ui/layersPanel.js';
 import { initColorPanel } from './ui/colorPanel.js';
 import { initStatusBar } from './ui/statusBar.js';
 import { initHistoryPanel } from './ui/historyPanel.js';
+import { initMobileBar } from './ui/mobileBar.js';
 import * as dialogs from './ui/dialogs.js';
 
 async function boot() {
@@ -59,6 +60,7 @@ async function boot() {
   initColorPanel();
   initStatusBar();
   initHistoryPanel();
+  initMobileBar();
 
   setTool('brush');
   autosave.scheduleAutosave();
@@ -87,7 +89,7 @@ async function boot() {
     renderer.fitToScreen();
     dialogs.newDocument().then((res) => {
       if (res) {
-        createDocument(res.width, res.height, res.background);
+        createDocument(res.width, res.height, res.background, res.colorSpace);
         renderer.fitToScreen();
       }
     });

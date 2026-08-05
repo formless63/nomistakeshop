@@ -1,11 +1,24 @@
 // js/core/canvasUtils.js — shared canvas helpers.
 // DOM is only touched inside functions; importing this module in Node is safe.
 
+import { state } from './state.js';
+
+// The active document's working color space ('srgb' | 'display-p3').
+// P3 docs keep their gamut in every offscreen canvas + ImageData; the
+// on-screen preview canvas stays sRGB (browser maps it).
+export function docColorSpace() {
+  const cs = state.doc && state.doc.colorSpace;
+  return cs === 'display-p3' ? 'display-p3' : 'srgb';
+}
+
 export function createCanvas(w, h) {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(w));
   canvas.height = Math.max(1, Math.round(h));
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const ctx = canvas.getContext('2d', {
+    willReadFrequently: true,
+    colorSpace: docColorSpace(),
+  });
   return { canvas, ctx };
 }
 
@@ -28,7 +41,9 @@ export function rgbToHex(r, g, b) {
 }
 
 export function getLayerImageData(layer) {
-  return layer.ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height);
+  return layer.ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height, {
+    colorSpace: docColorSpace(),
+  });
 }
 
 export function putLayerImageData(layer, imageData) {

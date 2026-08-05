@@ -891,3 +891,177 @@ input[type="range"]::-moz-range-thumb:hover {
   height: 26px;
   padding: 1px 2px;
 }
+
+/* ==========================================================================
+   Mobile pass (breakpoint 800px) — ARCHITECTURE v3 §4
+   Desktop (> 800px) is visually unchanged: every rule below is either
+   inside a max-width media query or targets elements hidden by default.
+   ========================================================================== */
+
+/* Mobile-only chrome: the drawer toggle (injected into #options-bar by
+   js/ui/mobileBar.js), the drawer close button (injected into #side-panel),
+   and the #panel-backdrop div. All hidden on desktop. */
+.mobile-panel-toggle,
+.mobile-panel-close,
+#panel-backdrop {
+  display: none;
+}
+
+@media (max-width: 800px) {
+  /* --- Layout: 44px toolbar + viewport; side panel leaves the grid --- */
+  #main-row {
+    grid-template-columns: 44px 1fr;
+  }
+
+  /* --- Side panel becomes a fixed right drawer --- */
+  #side-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    height: 100vh;
+    width: 80vw;
+    max-width: 320px;
+    transform: translateX(105%);
+    transition: transform 0.25s ease;
+    z-index: 900; /* above viewport + backdrop, below #dialog-root (1000) */
+    border-left: 1px solid var(--border);
+  }
+
+  body.panel-open #side-panel {
+    transform: translateX(0);
+  }
+
+  /* Dimmed backdrop behind the drawer; tapping it closes the drawer. */
+  #panel-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+    z-index: 850;
+  }
+
+  body.panel-open #panel-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* --- Drawer chrome (buttons injected by js/ui/mobileBar.js) --- */
+  .mobile-panel-toggle {
+    display: block;
+    margin-left: auto; /* right-aligned in the options bar */
+    flex: none;
+    padding: 4px 10px;
+    background: var(--bg-2);
+    border: 1px solid var(--border-light);
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+
+  .mobile-panel-close {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex: none;
+    min-height: 40px;
+    padding: 0 12px;
+    font-size: 16px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* --- Toolbar: 44px column, >= 40px touch targets, larger icons --- */
+  #toolbar {
+    padding: 2px 0;
+  }
+
+  .tool-button {
+    width: 40px;
+    height: 40px;
+    font-size: 22px;
+  }
+
+  /* --- Menu bar: horizontal scroll, no wrap; dropdowns stay on-screen --- */
+  #menu-bar {
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  .menu-button {
+    white-space: nowrap;
+  }
+
+  /* overflow-x: auto on #menu-bar clips absolutely-positioned dropdowns
+     (overflow-y computes to auto), so on mobile dropdowns go position:fixed
+     to escape the clip: pinned just below the ~30px-tall bar and clamped to
+     the viewport with 8px margins. */
+  .menu-dropdown {
+    position: fixed;
+    top: 30px;
+    left: 8px;
+    max-width: 92vw;
+    max-height: calc(100vh - 38px);
+    overflow-y: auto;
+  }
+
+  /* The last two top-level menus anchor their dropdowns to the right edge
+     so they cannot overflow the viewport's right side (CSS-only clamping). */
+  .menu:nth-last-child(-n + 2) .menu-dropdown {
+    left: auto;
+    right: 8px;
+  }
+
+  /* Flyout submenus expand inline instead of sideways, so they can never
+     overflow either viewport edge. */
+  .menu-item.has-submenu .menu-submenu {
+    position: static;
+  }
+
+  /* --- Options bar: horizontal scroll, no wrap --- */
+  #options-bar {
+    overflow-x: auto;
+    white-space: nowrap;
+    flex-wrap: nowrap;
+  }
+
+  /* --- Dialogs fit small screens; curves canvas shrinks --- */
+  .dialog-card {
+    min-width: 0;
+    max-width: 92vw;
+    max-height: 88vh;
+    overflow-y: auto;
+  }
+
+  .curves-canvas {
+    width: 100%;
+    height: auto;
+    aspect-ratio: 1;
+    max-width: 256px;
+  }
+
+  /* --- Touch drawing without page scroll/zoom --- */
+  #display-canvas {
+    touch-action: none;
+  }
+
+  /* --- Status bar: let the segments shrink between 600-800px --- */
+  #status-bar {
+    gap: 8px;
+  }
+
+  .status-doc,
+  .status-zoom,
+  .status-right,
+  .status-pos {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  /* Too narrow to be useful — hide the whole status bar. */
+  #status-bar {
+    display: none;
+  }
+}

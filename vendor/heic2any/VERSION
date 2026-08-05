@@ -1,0 +1,13 @@
+heic2any 0.0.4
+Upstream: https://github.com/alexcorvi/heic2any (npm: heic2any@0.0.4)
+Obtained via: npm pack heic2any
+Dist: dist/heic2any.min.js -> heic2any.umd.js (UMD bundle, libheif WASM embedded)
+Wrapper: heic2any.esm.js re-exports the UMD global as an ES module default.
+
+License: MIT (see LICENSE)
+Bundled libheif (via libheif-js, compiled to WASM): LGPL-3.0
+  Full text in LICENSE.libheif.LGPL-3.0.txt, fetched from
+  https://www.gnu.org/licenses/lgpl-3.0.txt (the heic2any npm package does not
+  ship libheif's license text; libheif upstream: https://github.com/strukturag/libheif)
+  The bundle is loaded dynamically and unmodified.
+Also bundled: gifshot (MIT, (c) 2017 Yahoo Inc.) for GIF output — unused by us.

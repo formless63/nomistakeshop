@@ -475,6 +475,7 @@ export function newDocument() {
   let hInput;
   let presetSelect;
   let bgSelect;
+  let csSelect;
   return openDialog({
     title: 'New Document',
     buildBody(body) {
@@ -513,11 +514,22 @@ export function newDocument() {
         bgSelect.append(opt);
       }
 
+      csSelect = el('select', 'dialog-input');
+      for (const [value, label] of [
+        ['srgb', 'sRGB'],
+        ['display-p3', 'Display P3 (wide gamut)'],
+      ]) {
+        const opt = el('option', '', label);
+        opt.value = value;
+        csSelect.append(opt);
+      }
+
       body.append(
         fieldRow('Preset', presetSelect),
         fieldRow('Width', wInput),
         fieldRow('Height', hInput),
         fieldRow('Background', bgSelect),
+        fieldRow('Color Space', csSelect),
       );
     },
     collect() {
@@ -526,7 +538,7 @@ export function newDocument() {
       if (!w.ok || !h.ok) return false;
       const background =
         bgSelect.value === 'white' ? '#ffffff' : bgSelect.value === 'black' ? '#000000' : 'transparent';
-      return { width: w.value, height: h.value, background };
+      return { width: w.value, height: h.value, background, colorSpace: csSelect.value };
     },
   });
 }

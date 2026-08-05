@@ -14,7 +14,7 @@
 
 import { state, emit, setSelection } from './state.js';
 import { history } from './history.js';
-import { createCanvas, cloneCanvas } from './canvasUtils.js';
+import { createCanvas, cloneCanvas, docColorSpace } from './canvasUtils.js';
 import { compositeLayers } from './composite.js';
 import { getSelectionMask } from '../tools/selectionPath.js';
 
@@ -25,7 +25,11 @@ function deepCopy(value) {
 }
 
 function maskFromCanvas(canvas, enabled = true) {
-  return { canvas, ctx: canvas.getContext('2d', { willReadFrequently: true }), enabled };
+  return {
+    canvas,
+    ctx: canvas.getContext('2d', { willReadFrequently: true, colorSpace: docColorSpace() }),
+    enabled,
+  };
 }
 
 function cloneMask(mask) {
@@ -47,7 +51,7 @@ export function makeLayer(name, width, height) {
   };
 }
 
-export function createDocument(width, height, background = '#ffffff') {
+export function createDocument(width, height, background = '#ffffff', colorSpace = 'srgb') {
   history.clear();
   const doc = {
     width,
@@ -55,6 +59,7 @@ export function createDocument(width, height, background = '#ffffff') {
     layers: [],
     activeLayerId: null,
     background,
+    colorSpace: colorSpace === 'display-p3' ? 'display-p3' : 'srgb',
   };
   state.doc = doc;
   state.activeTarget = 'layer';

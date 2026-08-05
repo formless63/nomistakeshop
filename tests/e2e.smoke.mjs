@@ -700,6 +700,236 @@ async function main() {
     assert.equal((await ev(() => window.__nms.state.selection)).feather, 10, 'feather not applied');
   });
 
+  // Check 25: PSD import — 2 layers with names/blend modes; the multiply
+  // composite renders dark purple ((200,30,30) x (30,30,200) -> ~(24,4,24)).
+  await check('25. PSD import: layers, multiply blend, dark composite', async () => {
+    const info = await ev(async () => {
+      const buf = await (await fetch('/tests/fixtures/two-layer.psd')).arrayBuffer();
+      const m = await import('/js/io/psd.js');
+      await m.openPsdFile(new File([buf], 'two-layer.psd'));
+      const doc = window.__nms.state.doc;
+      return {
+        w: doc.width,
+        h: doc.height,
+        layers: doc.layers.map((l) => ({ name: l.name, blendMode: l.blendMode })),
+      };
+    });
+    assert.deepEqual({ w: info.w, h: info.h }, { w: 8, h: 8 }, 'PSD doc size mismatch');
+    assert.equal(info.layers.length, 2, `expected 2 layers, got ${info.layers.length}`);
+    assert.equal(info.layers[0].name, 'Bottom Red', `bottom layer: ${info.layers[0].name}`);
+    assert.equal(info.layers[1].name, 'Top Multiply Blue', `top layer: ${info.layers[1].name}`);
+    assert.equal(info.layers[1].blendMode, 'multiply', `top blendMode: ${info.layers[1].blendMode}`);
+    const px = await displayRect(0, 0, 8, 8);
+    let n = 0; let r = 0; let g = 0; let b = 0;
+    for (let i = 0; i < px.length; i += 4) {
+      r += px[i]; g += px[i + 1]; b += px[i + 2]; n++;
+    }
+    r /= n; g /= n; b /= n;
+    assert.ok(r > 5 && r < 60, `composite red ${r.toFixed(1)} not multiply-dark`);
+    assert.ok(g < 30, `composite green ${g.toFixed(1)} too high for multiply`);
+    assert.ok(b > 5 && b < 60, `composite blue ${b.toFixed(1)} not multiply-dark`);
+    assert.ok(Math.abs(r - b) < 20, `composite r/b imbalance: ${r.toFixed(1)} vs ${b.toFixed(1)}`);
+  });
+
+  // Check 26: PSD export round trip — readPsd (in page context) sees the same
+  // layer stack that was imported in check 25.
+  await check('26. PSD export round trip preserves the layer stack', async () => {
+    const names = await ev(async () => {
+      let href = null;
+      const orig = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () { href = this.href; };
+      try {
+        await (await import('/js/io/psd.js')).exportPsd();
+      } finally {
+        HTMLAnchorElement.prototype.click = orig;
+      }
+      if (!href) throw new Error('exportPsd did not trigger an anchor download');
+      const buf = await (await fetch(href)).arrayBuffer();
+      const { readPsd } = await import('/vendor/ag-psd/index.js');
+      const back = readPsd(buf);
+      return (back.children || []).map((c) => c.name);
+    });
+    assert.deepEqual(names, ['Bottom Red', 'Top Multiply Blue']);
+  });
+
+  // Check 27: Content-Aware Fill removes a black dot. The first call
+  // lazy-loads the multi-MB OpenCV runtime — generous 90s budget.
+  await check('27. Content-Aware Fill via Edit menu removes the dot', async () => {
+    await freshDoc();
+    await key('KeyB');
+    await clickDoc(640, 400); // black dot
+    assert.ok((await sampleLayer(640, 400))[0] < 80, 'dot missing before fill');
+    await key('KeyM');
+    await dragDoc(600, 360, 680, 440); // rect select around the dot
+    assert.ok(await ev(() => window.__nms.state.selection), 'no selection before fill');
+    await clickMenu('Edit', 'Content-Aware Fill');
+    await page.waitForFunction(() => {
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      if (!layer || !layer.ctx) return false;
+      const d = layer.ctx.getImageData(640, 400, 1, 1).data;
+      return d[0] > 200 && d[1] > 200 && d[2] > 200;
+    }, { timeout: 90000, polling: 1000 });
+    const after = await sampleLayer(640, 400);
+    assert.ok(after[0] > 200 && after[1] > 200 && after[2] > 200,
+      `dot still present after fill: ${after.slice(0, 3)}`);
+  });
+
+  // Check 28: HEIC routing — garbage bytes route to the HEIC decoder and fail
+  // gracefully via status:message, with no uncaught exception.
+  await check('28. .heic routes to HEIC decoder and fails gracefully', async () => {
+    const res = await ev(async () => {
+      const stateMod = await import('/js/core/state.js');
+      const msgs = [];
+      const off = stateMod.on('status:message', (p) => msgs.push(p.text));
+      let threw = null;
+      try {
+        const m = await import('/js/io/formats.js');
+        await m.openByExtension(
+          new File([new Uint8Array([0, 1, 2, 3])], 'x.heic', { type: 'image/heic' }), true);
+      } catch (err) {
+        threw = String(err);
+      } finally {
+        off();
+      }
+      return { msgs, threw };
+    });
+    assert.equal(res.threw, null, `openByExtension threw: ${res.threw}`);
+    assert.ok(res.msgs.some((t) => /Decoding HEIC/.test(t)),
+      `no 'Decoding HEIC' status: ${JSON.stringify(res.msgs)}`);
+    assert.ok(res.msgs.some((t) => /Could not decode HEIC/.test(t)),
+      `no graceful failure status: ${JSON.stringify(res.msgs)}`);
+  });
+
+  // Check 29: RAW routing — same pattern with a .dng of garbage bytes.
+  await check('29. .dng routes to RAW decoder and fails gracefully', async () => {
+    const res = await ev(async () => {
+      const stateMod = await import('/js/core/state.js');
+      const msgs = [];
+      const off = stateMod.on('status:message', (p) => msgs.push(p.text));
+      let threw = null;
+      try {
+        const m = await import('/js/io/formats.js');
+        await m.openByExtension(
+          new File([new Uint8Array([0, 1, 2, 3])], 'x.dng', { type: 'image/x-adobe-dng' }), true);
+      } catch (err) {
+        threw = String(err);
+      } finally {
+        off();
+      }
+      return { msgs, threw };
+    });
+    assert.equal(res.threw, null, `openByExtension threw: ${res.threw}`);
+    assert.ok(res.msgs.some((t) => /Decoding RAW/.test(t)),
+      `no 'Decoding RAW' status: ${JSON.stringify(res.msgs)}`);
+    assert.ok(res.msgs.some((t) => /Could not decode RAW file/.test(t)),
+      `no graceful failure status: ${JSON.stringify(res.msgs)}`);
+  });
+
+  // Check 30: mobile 390x844 on a second page — drawer starts off-screen,
+  // the toggle opens it, a viewport tap closes it, and a stroke still paints.
+  await check('30. Mobile 390x844: drawer toggle, tap-close, stroke paints', async () => {
+    const mpage = await browser.newPage();
+    try {
+      await mpage.setViewport({ width: 390, height: 844 });
+      mpage.on('console', (msg) => {
+        if (msg.type() === 'error' && !/favicon/i.test(msg.text())) consoleErrors.push(msg.text());
+      });
+      mpage.on('pageerror', (err) => pageErrors.push(String(err)));
+      await mpage.goto(`${BASE}/index.html`, { waitUntil: 'load' });
+      // Dismiss the New Document dialog (declining an autosave prompt first).
+      await mpage.waitForSelector('.dialog-overlay', { visible: true, timeout: 5000 });
+      const title = await mpage.evaluate(() =>
+        document.querySelector('.dialog-overlay .dialog-title').textContent);
+      if (title !== 'New Document') {
+        await mpage.click('.dialog-overlay .dialog-button:not(.primary)');
+        await mpage.waitForSelector('.dialog-overlay', { visible: true, timeout: 5000 });
+      }
+      await mpage.click('.dialog-overlay .dialog-button.primary');
+      await mpage.waitForFunction(
+        () => !document.querySelector('.dialog-overlay'), { timeout: 5000 });
+
+      const panelBox = () => mpage.evaluate(() => {
+        const r = document.getElementById('side-panel').getBoundingClientRect();
+        return { left: r.left, right: r.right };
+      });
+      const settle = () => new Promise((r) => setTimeout(r, 450)); // 0.25s CSS transition
+
+      let box = await panelBox();
+      assert.ok(box.left >= 389, `side panel not hidden off-screen: left=${box.left}`);
+
+      await mpage.click('.mobile-panel-toggle');
+      await settle();
+      box = await panelBox();
+      assert.ok(box.left >= 0 && box.right <= 392,
+        `open drawer not within viewport: ${JSON.stringify(box)}`);
+
+      // Tapping the visible sliver of the viewport (left of the open drawer;
+      // the backdrop receives the tap there) closes it again.
+      const vp = await mpage.evaluate(() => {
+        const r = document.getElementById('viewport').getBoundingClientRect();
+        return { x: r.left + 12, y: r.top + r.height / 2 };
+      });
+      await mpage.mouse.click(vp.x, vp.y);
+      await settle();
+      box = await panelBox();
+      assert.ok(box.left >= 389, `tap did not close the drawer: left=${box.left}`);
+
+      // A mouse-drawn brush stroke must still land dark pixels on the layer.
+      const pt = (x, y) => mpage.evaluate(({ x, y }) => {
+        const p = window.__nms.renderer.docToScreen(x, y);
+        const r = document.getElementById('display-canvas').getBoundingClientRect();
+        return { x: r.left + p.x, y: r.top + p.y };
+      }, { x, y });
+      const a = await pt(200, 400);
+      const bpt = await pt(1000, 400);
+      await mpage.mouse.move(a.x, a.y);
+      await mpage.mouse.down();
+      for (let i = 1; i <= 10; i++) {
+        await mpage.mouse.move(a.x + ((bpt.x - a.x) * i) / 10, a.y + ((bpt.y - a.y) * i) / 10);
+      }
+      await mpage.mouse.up();
+      const dark = await mpage.evaluate(() => {
+        const doc = window.__nms.state.doc;
+        const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+        const d = layer.ctx.getImageData(200, 395, 800, 10).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i] < 80 && d[i + 1] < 80 && d[i + 2] < 80 && d[i + 3] > 200) n++;
+        }
+        return n;
+      });
+      assert.ok(dark > 50, `mobile stroke left only ${dark} dark px`);
+    } finally {
+      await mpage.close().catch(() => {});
+      await page.bringToFront().catch(() => {});
+    }
+  });
+
+  // Check 31: Display-P3 document — colorSpace on the doc and the layer ctx,
+  // and it survives a paint + undo cycle.
+  await check('31. Display-P3 doc: colorSpace on doc + ctx, survives undo', async () => {
+    await ev(() => {
+      window.__nms.createDocument(64, 64, '#ffffff', 'display-p3');
+      window.__nms.renderer.fitToScreen();
+      window.__nms.state.primaryColor = '#000000';
+    });
+    assert.equal(await ev(() => window.__nms.state.doc.colorSpace), 'display-p3');
+    const ctxCs = await ev(() => {
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      return layer.ctx.getContextAttributes().colorSpace;
+    });
+    assert.equal(ctxCs, 'display-p3', `layer ctx colorSpace is ${ctxCs}`);
+    await key('KeyB');
+    await clickDoc(32, 32);
+    assert.ok((await sampleLayer(32, 32))[0] < 80, 'P3 stroke did not paint');
+    await ev(() => window.__nms.history.undo());
+    assert.equal(await ev(() => window.__nms.state.doc.colorSpace), 'display-p3',
+      'doc colorSpace lost after undo');
+    await freshDoc(); // back to srgb 1280x800 for cleanliness
+  });
+
   // Check 1 (asserted last): zero console errors / pageerrors across the run.
   await check('1. Zero console errors and zero pageerrors', async () => {
     assert.deepEqual(pageErrors, [], `pageerrors:\n${pageErrors.join('\n')}`);

@@ -109,7 +109,10 @@ export const io = {
       imageInput.addEventListener('change', () => {
         const file = imageInput.files && imageInput.files[0];
         imageInput.value = ''; // re-picking the same file must fire change again
-        if (file) io.openImageFile(file, openAsNewDoc);
+        // Route by extension: .psd/.heic/.raw formats get their decoders,
+        // plain images take the standard path. Dynamic import avoids a
+        // module cycle (formats.js dynamically imports this module).
+        if (file) import('./formats.js').then((m) => m.openByExtension(file, openAsNewDoc));
       });
     }
     if (projectInput) {
@@ -121,8 +124,8 @@ export const io = {
     }
   },
 
-  // Drag & drop onto the viewport: image files open as new layers,
-  // .nmsproject files load as projects.
+  // Drag & drop onto the viewport: images/PSD/HEIC/RAW open via the format
+  // router (as new layers), .nmsproject files load as projects.
   initDragDrop() {
     const viewport = document.getElementById('viewport');
     if (!viewport) return;
@@ -136,12 +139,13 @@ export const io = {
       const files = e.dataTransfer && e.dataTransfer.files;
       if (!files) return;
       for (const file of files) {
-        if (file.type && file.type.startsWith('image/')) {
-          io.openImageFile(file, false)
-            .then(() => statusMessage('Added dropped image as layer'))
-            .catch(() => alertError(`Could not open dropped file: ${file.name}`));
-        } else if (/\.nmsproject$/i.test(file.name || '')) {
+        if (/\.nmsproject$/i.test(file.name || '')) {
           io.loadProjectFile(file);
+        } else {
+          import('./formats.js')
+            .then((m) => m.openByExtension(file, false))
+            .then(() => statusMessage('Added dropped file as layer'))
+            .catch(() => alertError(`Could not open dropped file: ${file.name}`));
         }
       }
     });
@@ -275,6 +279,7 @@ export const io = {
       height: doc.height,
       activeLayerId: doc.activeLayerId,
       background: doc.background,
+      colorSpace: doc.colorSpace || 'srgb',
       layers: doc.layers.map((layer) => {
         if (layer.type === 'adjustment') {
           return {
@@ -379,6 +384,7 @@ export const io = {
     if (data.background === 'transparent' || data.background === '#ffffff') {
       doc.background = data.background;
     }
+    doc.colorSpace = data.colorSpace === 'display-p3' ? 'display-p3' : 'srgb';
     const layers = [];
     for (const item of decoded) {
       if (!item) continue;

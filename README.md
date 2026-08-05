@@ -8,9 +8,9 @@ free forever, no install, no account, no tracking. Open the page, start editing.
 **Live demo:** https://formless63.github.io/nomistakeshop/
 
 The core engine is hand-written ES modules + Canvas 2D (no framework, no
-build step), with best-in-class FOSS libraries vendored at the edges where a
-spec matters more than our own code (see the roadmap: PSD via ag-psd, RAW via
-LibRaw-wasm).
+build step), with best-in-class FOSS libraries vendored and lazy-loaded at
+the edges (PSD, RAW, HEIC, inpainting) — see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Run
 
@@ -33,6 +33,8 @@ Any static file server works (`npx http-server`, nginx, …). Opening
   contiguous), crop, eyedropper, brush (size/hardness/opacity), eraser,
   clone stamp (aligned/non-aligned), dodge/burn (shadows/midtones/highlights),
   flood fill, gradient (linear/radial), text, shapes, hand, zoom
+- **Content-aware fill** — select a region, Edit > Content-Aware Fill
+  (OpenCV Telea inpainting, lazy-loaded on first use)
 - **Filters** — brightness, contrast, saturation, hue rotate, hue/saturation/
   lightness, grayscale, invert, sepia, threshold, posterize, levels, curves
   (visual editor), gradient map, box blur, sharpen, noise, pixelate, emboss,
@@ -43,9 +45,14 @@ Any static file server works (`npx http-server`, nginx, …). Opening
   flip canvas / layer, crop to selection, free transform layer (scale/rotate)
 - **Editing** — 25-step undo/redo with clickable history panel,
   cut/copy/paste (internal + system clipboard), paste as new layer
-- **File** — open image (new doc or as layer), drag & drop images onto the
-  canvas, export PNG / JPEG / WebP, save/load full layered project
+- **File formats** — open images, **PSD** (layers, masks, blend modes),
+  **HEIC**, and **RAW** (CR2/NEF/DNG/ARW/…) via File > Open or drag & drop;
+  export PNG / JPEG / WebP / **PSD**; save/load full layered project
   (`.nmsproject`, includes masks and adjustment layers)
+- **Color** — sRGB or **Display P3** wide-gamut documents (gamut preserved
+  through import → edit → export; on-screen preview is sRGB-mapped)
+- **Mobile** — responsive layout at ≤800px: slide-in layers/history drawer,
+  touch drawing, touch-sized tools, scrollable menus
 - **Session** — autosaves to IndexedDB every 30s; restore prompt on reload
 - **View** — zoom to cursor (Ctrl+wheel), pan, fit to screen, actual pixels,
   pixel grid overlay, HiDPI-crisp rendering
@@ -63,40 +70,42 @@ Any static file server works (`npx http-server`, nginx, …). Opening
 
 ```sh
 npm test           # unit tests (node:test — filters, history, blend modes)
-npm run test:e2e   # headless-Chrome suite (24 end-to-end checks)
+npm run test:e2e   # headless-Chrome suite (31 end-to-end checks)
 ```
 
 ## Architecture
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) and [ARCHITECTURE.v2.md](ARCHITECTURE.v2.md)
-— the binding module contracts. `js/core` (state/events, document+layers+masks,
-history, compositing, renderer) · `js/tools` · `js/filters` · `js/ops` ·
-`js/io` (files, clipboard, autosave) · `js/ui` · `js/main.js` (boot).
+See [ARCHITECTURE.md](ARCHITECTURE.md), [ARCHITECTURE.v2.md](ARCHITECTURE.v2.md)
+and [ARCHITECTURE.v3.md](ARCHITECTURE.v3.md) — the binding module contracts.
+`js/core` (state/events, document+layers+masks, history, compositing,
+renderer) · `js/tools` · `js/filters` · `js/ops` · `js/io` (files, formats,
+clipboard, autosave) · `js/ui` · `vendor/` (FOSS libs, lazy-loaded) ·
+`js/main.js` (boot).
 
 ## Roadmap
 
-- **PSD import/export** via [ag-psd](https://github.com/Agamnentzar/ag-psd)
-  (MIT) — real layered PSD round-trips, vendored and lazy-loaded
-- **RAW import** (CR2/NEF/DNG/…) via a LibRaw/dcraw WASM build — lazy-loaded
-- **HEIC import** via [heic2any](https://github.com/alexcorvi/heic2any) /
-  libheif-wasm
-- **Content-aware fill / inpaint** via [OpenCV.js](https://github.com/opencv/opencv)
-  (Apache-2.0, Telea inpainting)
-- **Wide-gamut (Display-P3) canvas support** via native Canvas 2D color spaces
+- **CMYK soft-proofing** via a LittleCMS WASM build — print-prep preview
+- **Smart layers** — non-destructive scale/rotate via the composite pipeline
+- **Selection edge refinement** — marching-squares outlines, anti-aliased
+  wand edges
 
 ## External tools
 
 The editing core (layers, masks, compositing, wand, flood fill, every filter)
-is hand-written against browser APIs — deliberately: that code IS the product,
-it's small, exact, and fully test-covered, and no library does it for you.
-Where a file format or a hard algorithm is the problem (PSD, RAW, HEIC,
-inpaint), we adopt battle-tested FOSS rather than reinvent it — see the
-roadmap below. Tooling used to develop and test nomistakeshop:
+is hand-written against browser APIs — that code is small, exact, and fully
+test-covered, and no library does it for you. Where a file format or a hard
+algorithm is the problem, we adopt battle-tested FOSS rather than reinvent it:
 
 | Project | License | What we use it for |
 |---|---|---|
-| [Node.js](https://github.com/nodejs/node) | MIT | Runs the unit test runner (`node:test`) and the e2e script |
-| [puppeteer-core](https://github.com/puppeteer/puppeteer) | Apache-2.0 | Drives headless Chrome in the e2e suite (dev dependency) |
-| [Playwright's Chromium build](https://github.com/microsoft/playwright) | Apache-2.0 | Local browser binary the e2e suite runs against |
+| [ag-psd](https://github.com/Agamnentzar/ag-psd) | MIT | PSD import/export (vendored, lazy-loaded) |
+| [heic2any](https://github.com/alexcorvi/heic2any) + [libheif](https://github.com/strukturag/libheif) | MIT / LGPL-3.0 | HEIC/HEIF import (vendored, lazy-loaded) |
+| [libraw-wasm](https://github.com/ybouane/LibRaw-Wasm) + [LibRaw](https://github.com/LibRaw/LibRaw) | ISC / LGPL-2.1 | RAW import — CR2/NEF/DNG/ARW/… (vendored, lazy-loaded) |
+| [OpenCV.js](https://github.com/opencv/opencv) | Apache-2.0 | Content-aware fill inpainting (vendored, lazy-loaded) |
+| [Node.js](https://github.com/nodejs/node) | MIT | Runs the unit test runner (`node:test`) and the e2e script (dev only) |
+| [puppeteer-core](https://github.com/puppeteer/puppeteer) | Apache-2.0 | Drives headless Chrome in the e2e suite (dev only) |
+| [Playwright's Chromium build](https://github.com/microsoft/playwright) | Apache-2.0 | Local browser binary the e2e suite runs against (dev only) |
 | [Python `http.server`](https://github.com/python/cpython) | PSF-2.0 | Local static file server (`npm start`, e2e harness) |
 | [GitHub Actions](https://github.com/actions) | MIT (actions) | CI (unit + e2e on every push) and GitHub Pages deployment |
+
+Full license texts and compliance notes: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

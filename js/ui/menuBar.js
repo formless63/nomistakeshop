@@ -84,7 +84,7 @@ function buildMenus() {
           action() {
             dialogs.newDocument().then((v) => {
               if (!v) return;
-              doc.createDocument(v.width, v.height, v.background);
+              doc.createDocument(v.width, v.height, v.background, v.colorSpace);
               renderer.fitToScreen();
             });
           },
@@ -98,6 +98,12 @@ function buildMenus() {
         { label: 'Export PNG', action: () => io.exportImage('png') },
         { label: 'Export JPEG', action: () => io.exportImage('jpeg') },
         { label: 'Export WebP', action: () => io.exportImage('webp') },
+        {
+          label: 'Export PSD',
+          action() {
+            import('../io/psd.js').then((m) => m.exportPsd()).catch(() => {});
+          },
+        },
       ],
     },
     {
@@ -136,6 +142,14 @@ function buildMenus() {
           disabled: () => !menuClipboard || !menuClipboard.hasClipboard(),
           action() {
             if (menuClipboard) menuClipboard.pasteAsNewLayer();
+          },
+        },
+        { separator: true },
+        {
+          label: 'Content-Aware Fill',
+          disabled: () => !state.selection || !activePixelLayer(),
+          action() {
+            import('../ops/inpaint.js').then((m) => m.contentAwareFill()).catch(() => {});
           },
         },
       ],
