@@ -239,3 +239,114 @@ test('filters clamp out-of-range params to contract ranges', () => {
   filters.pixelate(p, 1);
   assert.deepEqual(px(p, 0, 0), [64, 64, 64, 255]);
 });
+
+// --- v2 filters (ARCHITECTURE.v2.md §5) --------------------------------------
+
+test('levels: default params are identity (alpha untouched)', () => {
+  const img = makeImg(3, 1, [[0, 128, 255], [37, 200, 111, 190], [1, 2, 3, 0]]);
+  const before = Array.from(img.data);
+  const out = filters.levels(img);
+  assert.equal(out, img, 'mutate-and-return');
+  assert.deepEqual(Array.from(img.data), before);
+
+  const img2 = makeImg(2, 1, [[10, 20, 30], [250, 240, 230]]);
+  filters.levels(img2, {});
+  assert.deepEqual(px(img2, 0, 0), [10, 20, 30, 255]);
+});
+
+test('levels: inBlack=128 clips below and maps endpoints to out range', () => {
+  const img = makeImg(3, 1, [[0, 0, 0], [128, 128, 128], [255, 255, 255]]);
+  filters.levels(img, { inBlack: 128 });
+  assert.deepEqual(px(img, 0, 0), [0, 0, 0, 255]); // below inBlack -> outBlack
+  assert.deepEqual(px(img, 1, 0), [0, 0, 0, 255]); // == inBlack -> outBlack
+  assert.deepEqual(px(img, 2, 0), [255, 255, 255, 255]); // 255 -> outWhite
+
+  const img2 = makeImg(2, 1, [[128, 128, 128], [255, 255, 255]]);
+  filters.levels(img2, { inBlack: 128, outBlack: 10, outWhite: 200 });
+  assert.deepEqual(px(img2, 0, 0), [10, 10, 10, 255]);
+  assert.deepEqual(px(img2, 1, 0), [200, 200, 200, 255]);
+});
+
+test('levels: gamma 2 remaps midpoint 128 to 181 (pow(t, 1/gamma))', () => {
+  const img = makeImg(2, 1, [[128, 128, 128, 77], [64, 64, 64]]);
+  filters.levels(img, { gamma: 2 });
+  // t = 128/255; pow(t, 0.5) * 255 = 180.67... -> 181 (brightens, Photoshop-style)
+  assert.equal(px(img, 0, 0)[0], 181);
+  assert.equal(px(img, 0, 0)[3], 77, 'alpha untouched');
+  // t = 64/255; pow(t, 0.5) * 255 = 128.0 -> 128
+  assert.equal(px(img, 1, 0)[0], 128);
+});
+
+test('curves: identity diagonal leaves pixels unchanged', () => {
+  const img = makeImg(2, 2, [[0, 128, 255], [37, 200, 111, 190], [1, 2, 3], [254, 253, 252]]);
+  const before = Array.from(img.data);
+  const out = filters.curves(img);
+  assert.equal(out, img, 'mutate-and-return');
+  assert.deepEqual(Array.from(img.data), before);
+});
+
+test('curves: fewer than 2 points is a no-op', () => {
+  const single = makeImg(2, 1, [[50, 60, 70], [200, 100, 50]]);
+  const before = Array.from(single.data);
+  filters.curves(single, { points: [[10, 200]] });
+  assert.deepEqual(Array.from(single.data), before);
+
+  const empty = makeImg(1, 1, [[9, 99, 199]]);
+  filters.curves(empty, { points: [] });
+  assert.deepEqual(px(empty, 0, 0), [9, 99, 199, 255]);
+});
+
+test('curves: two-point [[0,0],[255,128]] halves input 200', () => {
+  const img = makeImg(3, 1, [[200, 200, 200], [0, 0, 0], [255, 255, 255]]);
+  filters.curves(img, { points: [[0, 0], [255, 128]] });
+  const v = px(img, 0, 0)[0];
+  assert.ok(Math.abs(v - 100) <= 2, `expected ~100, got ${v}`);
+  assert.equal(px(img, 1, 0)[0], 0, 'endpoint 0 fixed');
+  assert.equal(px(img, 2, 0)[0], 128, 'endpoint 255 -> 128');
+});
+
+test('hueSaturation: default params are identity', () => {
+  const img = makeImg(4, 1, [[200, 100, 50], [12, 34, 56, 190], [255, 0, 0], [128, 128, 128]]);
+  const before = Array.from(img.data);
+  const out = filters.hueSaturation(img);
+  assert.equal(out, img, 'mutate-and-return');
+  assert.deepEqual(Array.from(img.data), before);
+});
+
+test('hueSaturation: saturation -100 makes r=g=b per pixel', () => {
+  const img = makeImg(3, 1, [[200, 100, 50], [10, 240, 90, 128], [0, 0, 255]]);
+  filters.hueSaturation(img, { saturation: -100 });
+  for (let x = 0; x < 3; x++) {
+    const [r, g, b, a] = px(img, x, 0);
+    assert.equal(r, g, `pixel ${x}: r !== g`);
+    assert.equal(g, b, `pixel ${x}: g !== b`);
+    assert.ok(a === 255 || a === 128, 'alpha untouched');
+  }
+});
+
+test('gradientMap: black->white equals luma per pixel', () => {
+  const img = makeImg(2, 1, [[200, 100, 50], [255, 0, 0]]);
+  const out = filters.gradientMap(img);
+  assert.equal(out, img, 'mutate-and-return');
+  assert.deepEqual(px(img, 0, 0), [124, 124, 124, 255]); // luma 124.2 -> 124
+  assert.deepEqual(px(img, 1, 0), [76, 76, 76, 255]); // 0.299*255 = 76.245 -> 76
+});
+
+test('gradientMap: red->blue maps luma 0 to red and 255 to blue', () => {
+  const img = makeImg(2, 1, [[0, 0, 0], [255, 255, 255, 64]]);
+  filters.gradientMap(img, { from: '#ff0000', to: '#0000ff' });
+  assert.deepEqual(px(img, 0, 0), [255, 0, 0, 255]);
+  assert.deepEqual(px(img, 1, 0), [0, 0, 255, 64]); // alpha untouched
+});
+
+test('v2 filters are total: garbage params never throw and stay in 0-255', () => {
+  const extremes = [null, undefined, 9999, 'abc', NaN, {}, { points: 'nope' }, { from: 42 }];
+  for (const name of ['levels', 'curves', 'hueSaturation', 'gradientMap']) {
+    for (const v of extremes) {
+      const img = makeImg(3, 1, [[37, 200, 111, 190], [0, 0, 0], [255, 255, 255]]);
+      assert.doesNotThrow(() => filters[name](img, v), `${name}(${v}) threw`);
+      assertAllBytesValid(img);
+      assert.equal(img.width, 3);
+    }
+  }
+});

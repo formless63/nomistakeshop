@@ -20,8 +20,11 @@ const TOOL_KEYS = {
   v: 'move',
   m: 'selectRect',
   l: 'lasso',
+  w: 'wand',
   b: 'brush',
   e: 'eraser',
+  s: 'clone',
+  o: 'dodgeBurn',
   g: 'fill',
   i: 'eyedropper',
   t: 'text',
@@ -90,6 +93,17 @@ function onKeyDown(e) {
     } else if (key === 'd') {
       e.preventDefault();
       deselect();
+    } else if (key === 'c' || key === 'x') {
+      if (!state.doc) return;
+      e.preventDefault();
+      // Dynamic import avoids a core -> io module cycle.
+      import('../io/clipboard.js').then((m) =>
+        key === 'c' ? m.copySelection() : m.cutSelection()
+      );
+    } else if (key === 'v') {
+      if (!state.doc) return; // let the browser's native paste through
+      e.preventDefault();
+      import('../io/clipboard.js').then((m) => m.pasteAsNewLayer());
     }
     return;
   }
@@ -102,6 +116,8 @@ function onKeyDown(e) {
     adjustBrushSize(-1);
   } else if (e.key === ']') {
     adjustBrushSize(1);
+  } else if (e.shiftKey && e.key === 'M') {
+    if (tools.has('selectEllipse')) setTool('selectEllipse');
   } else if (TOOL_KEYS[key] && tools.has(TOOL_KEYS[key])) {
     setTool(TOOL_KEYS[key]);
   }

@@ -283,3 +283,156 @@ export function edgeDetect(imageData) {
   const kernel = [-1, -1, -1, -1, 8, -1, -1, -1, -1];
   return convolve3x3(imageData, kernel, 0, true);
 }
+
+// --- v2 filters -------------------------------------------------------------
+// Object-param filters: each takes a single params object. All are total and
+// clamp their inputs; alpha is never touched.
+
+// Standard Photoshop levels: normalize v from [inBlack,inWhite] to [0,1]
+// (clamped), apply gamma as pow(t, 1/gamma), map to [outBlack,outWhite].
+export function levels(imageData, opts = {}) {
+  const { inBlack = 0, inWhite = 255, gamma = 1, outBlack = 0, outWhite = 255 } = opts || {};
+  const ib = num(inBlack, 0, 254, 0);
+  const iw = Math.max(ib + 1, num(inWhite, 1, 255, 255));
+  const g = num(gamma, 0.1, 9.99, 1);
+  const ob = num(outBlack, 0, 255, 0);
+  const ow = num(outWhite, 0, 255, 255);
+  const range = iw - ib;
+  const invGamma = 1 / g;
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    for (let c = 0; c < 3; c++) {
+      let t = (d[i + c] - ib) / range;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      d[i + c] = ob + Math.pow(t, invGamma) * (ow - ob);
+    }
+  }
+  return imageData;
+}
+
+// Master-channel LUT built from control points via Catmull-Rom interpolation
+// (Hermite form with finite-difference tangents; passes through every point,
+// collinear points stay linear). Fewer than 2 points -> no-op.
+export function curves(imageData, opts = {}) {
+  const { points = [[0, 0], [255, 255]] } = opts || {};
+  if (!Array.isArray(points)) return imageData;
+  const pts = points
+    .filter((p) => Array.isArray(p) && p.length >= 2)
+    .map((p) => [num(p[0], 0, 255, 0), num(p[1], 0, 255, 0)])
+    .sort((a, b) => a[0] - b[0]);
+  if (pts.length < 2) return imageData;
+  const last = pts.length - 1;
+  const slopes = pts.map((p, i) => {
+    const prev = pts[Math.max(0, i - 1)];
+    const next = pts[Math.min(last, i + 1)];
+    const dx = next[0] - prev[0];
+    return dx === 0 ? 0 : (next[1] - prev[1]) / dx;
+  });
+  const lut = new Uint8ClampedArray(256); // assignment rounds + clamps to 0-255
+  let seg = 0;
+  for (let x = 0; x < 256; x++) {
+    if (x <= pts[0][0]) {
+      lut[x] = pts[0][1];
+      continue;
+    }
+    if (x >= pts[last][0]) {
+      lut[x] = pts[last][1];
+      continue;
+    }
+    while (x > pts[seg + 1][0]) seg++;
+    const x1 = pts[seg][0];
+    const y1 = pts[seg][1];
+    const x2 = pts[seg + 1][0];
+    const y2 = pts[seg + 1][1];
+    const dx = x2 - x1; // > 0: x1 < x <= x2 by the scan above
+    const t = (x - x1) / dx;
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const h00 = 2 * t3 - 3 * t2 + 1;
+    const h10 = t3 - 2 * t2 + t;
+    const h01 = -2 * t3 + 3 * t2;
+    const h11 = t3 - t2;
+    lut[x] = h00 * y1 + h10 * dx * slopes[seg] + h01 * y2 + h11 * dx * slopes[seg + 1];
+  }
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i] = lut[d[i]];
+    d[i + 1] = lut[d[i + 1]];
+    d[i + 2] = lut[d[i + 2]];
+  }
+  return imageData;
+}
+
+function hue2rgb(p, q, t) {
+  if (t < 0) t += 1;
+  if (t > 1) t -= 1;
+  if (t < 1 / 6) return p + (q - p) * 6 * t;
+  if (t < 1 / 2) return q;
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+  return p;
+}
+
+// Per-pixel HSL adjustment: hue shifts (degrees, wraps), saturation/lightness
+// scale their HSL components by 1 + v/100 (clamped to [0,1]).
+export function hueSaturation(imageData, opts = {}) {
+  const { hue = 0, saturation = 0, lightness = 0 } = opts || {};
+  const dh = num(hue, -180, 180, 0) / 360;
+  const sf = 1 + num(saturation, -100, 100, 0) / 100;
+  const lf = 1 + num(lightness, -100, 100, 0) / 100;
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i] / 255;
+    const g = d[i + 1] / 255;
+    const b = d[i + 2] / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let h = 0;
+    let s = 0;
+    const l = (max + min) / 2;
+    if (max !== min) {
+      const delta = max - min;
+      s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min);
+      if (max === r) h = ((g - b) / delta + (g < b ? 6 : 0)) / 6;
+      else if (max === g) h = ((b - r) / delta + 2) / 6;
+      else h = ((r - g) / delta + 4) / 6;
+    }
+    h = (((h + dh) % 1) + 1) % 1;
+    s = Math.min(1, Math.max(0, s * sf));
+    const l2 = Math.min(1, Math.max(0, l * lf));
+    if (s === 0) {
+      d[i] = d[i + 1] = d[i + 2] = l2 * 255;
+    } else {
+      const q = l2 < 0.5 ? l2 * (1 + s) : l2 + s - l2 * s;
+      const p = 2 * l2 - q;
+      d[i] = hue2rgb(p, q, h + 1 / 3) * 255;
+      d[i + 1] = hue2rgb(p, q, h) * 255;
+      d[i + 2] = hue2rgb(p, q, h - 1 / 3) * 255;
+    }
+  }
+  return imageData;
+}
+
+// Local hex parser so filters.js stays dependency-free. Invalid input falls
+// back to the given [r,g,b].
+function parseHexColor(hex, fallback) {
+  let h = String(hex).trim().replace(/^#/, '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return fallback;
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+// Maps each pixel's luma (Rec.601) t∈[0,1] to from + (to - from) * t.
+export function gradientMap(imageData, opts = {}) {
+  const { from = '#000000', to = '#ffffff' } = opts || {};
+  const cf = parseHexColor(from, [0, 0, 0]);
+  const ct = parseHexColor(to, [255, 255, 255]);
+  const d = imageData.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const t = (LUMA_R * d[i] + LUMA_G * d[i + 1] + LUMA_B * d[i + 2]) / 255;
+    d[i] = cf[0] + (ct[0] - cf[0]) * t;
+    d[i + 1] = cf[1] + (ct[1] - cf[1]) * t;
+    d[i + 2] = cf[2] + (ct[2] - cf[2]) * t;
+  }
+  return imageData;
+}

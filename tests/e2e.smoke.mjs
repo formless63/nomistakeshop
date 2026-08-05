@@ -169,6 +169,33 @@ async function main() {
     }, { menuLabel, itemMatch });
   }
 
+  // Click a leaf item inside a flyout submenu (e.g. Layer > New Adjustment
+  // Layer > Invert). The submenu parent is matched by prefix, the leaf by
+  // exact label text.
+  async function clickSubMenu(menuLabel, parentMatch, itemText) {
+    await ev(({ menuLabel, parentMatch, itemText }) => {
+      const btn = [...document.querySelectorAll('#menu-bar .menu-button')]
+        .find((b) => b.textContent.trim() === menuLabel);
+      if (!btn) throw new Error(`menu not found: ${menuLabel}`);
+      btn.click();
+      const parent = [...btn.parentElement.querySelectorAll('.menu-item.has-submenu')]
+        .find((i) => i.textContent.trim().startsWith(parentMatch));
+      if (!parent) throw new Error(`submenu not found: ${menuLabel} > ${parentMatch}`);
+      const item = [...parent.querySelectorAll('.menu-submenu .menu-item')]
+        .find((i) => i.textContent.trim() === itemText);
+      if (!item) throw new Error(`submenu item not found: ${parentMatch} > ${itemText}`);
+      item.click();
+    }, { menuLabel, parentMatch, itemText });
+  }
+
+  // Reset to a clean 1280x800 white document (no selection, black primary).
+  const freshDoc = () => ev(() => {
+    window.__nms.state.selection = null;
+    window.__nms.createDocument(1280, 800, '#ffffff');
+    window.__nms.renderer.fitToScreen();
+    window.__nms.state.primaryColor = '#000000';
+  });
+
   async function key(code, mods = []) {
     for (const m of mods) await page.keyboard.down(m);
     await page.keyboard.press(code);
@@ -186,12 +213,24 @@ async function main() {
   };
 
   // --- load ----------------------------------------------------------------
+  // Guarantee a clean autosave state before app scripts run (the boot flow
+  // prompts to restore an autosaved session when one exists).
+  await page.evaluateOnNewDocument(() => {
+    try { indexedDB.deleteDatabase('nomistakeshop'); } catch { /* no IDB */ }
+  });
   await page.goto(`${BASE}/index.html`, { waitUntil: 'load' });
 
   // Check 2: New Document dialog on load -> confirm -> 1280x800, 1 layer.
   await check('2. New Document dialog confirms to 1280x800 / 1 layer', async () => {
     await waitDialog();
-    const title = await ev(() => document.querySelector('.dialog-overlay .dialog-title').textContent);
+    let title = await ev(() => document.querySelector('.dialog-overlay .dialog-title').textContent);
+    if (title !== 'New Document') {
+      // An autosave restore prompt appeared — decline it and wait for the
+      // New Document dialog that follows.
+      await page.click('.dialog-overlay .dialog-button:not(.primary)');
+      await waitDialog();
+      title = await ev(() => document.querySelector('.dialog-overlay .dialog-title').textContent);
+    }
     assert.equal(title, 'New Document');
     await confirmDialog();
     const info = await ev(() => ({
@@ -202,10 +241,10 @@ async function main() {
     assert.deepEqual(info, { w: 1280, h: 800, layers: 1 });
   });
 
-  // Check 3: toolbar has 13 buttons; brush button activates.
-  await check('3. Toolbar has 13 buttons; brush activates', async () => {
+  // Check 3: toolbar has 17 buttons; brush button activates.
+  await check('3. Toolbar has 17 buttons; brush activates', async () => {
     const count = await ev(() => document.querySelectorAll('#toolbar .tool-button').length);
-    assert.equal(count, 13);
+    assert.equal(count, 17);
     await ev(() => {
       const btn = [...document.querySelectorAll('#toolbar .tool-button')]
         .find((b) => b.title.startsWith('Brush'));
@@ -397,6 +436,234 @@ async function main() {
     await redo(); await redo(); await redo();
     assert.equal(await ev(() => window.__nms.state.doc.layers.length), 2, 'expected 2 layers after 3 redos');
     assert.deepEqual((await sampleLayer(100, 100)).slice(0, 3), [0, 0, 0], 'fill not restored after redos');
+  });
+
+  // Check 15: layer mask — painting black into the mask hides stroke pixels.
+  await check('15. Layer mask: black paint hides pixels; undo restores', async () => {
+    await freshDoc();
+    await key('KeyB');
+    await dragDoc(300, 400, 700, 400); // black stroke on the white Background
+    let dark = countDark(await displayRect(300, 390, 400, 20));
+    assert.ok(dark > 50, `stroke missing before mask: ${dark} dark px`);
+    await clickMenu('Layer', 'Add Layer Mask (White)');
+    const hasMaskThumb = await ev(() => !!document.querySelector('#layers-panel .mask-thumb'));
+    assert.ok(hasMaskThumb, 'no mask thumbnail in the layers panel');
+    // Click the mask thumbnail to target the mask, then paint black over the stroke.
+    await ev(() => document.querySelector('#layers-panel .mask-thumb').click());
+    assert.equal(await ev(() => window.__nms.state.activeTarget), 'mask');
+    await dragDoc(300, 400, 700, 400); // black into the mask -> hide the stroke
+    dark = countDark(await displayRect(300, 390, 400, 20));
+    assert.ok(dark <= 5, `masked stroke still visible: ${dark} dark px`);
+    await undo(); // undo the mask paint stroke
+    dark = countDark(await displayRect(300, 390, 400, 20));
+    assert.ok(dark > 50, `undo did not bring the stroke back: ${dark} dark px`);
+  });
+
+  // Check 16: adjustment layer (Invert) recolors the composite; undo reverts.
+  await check('16. Adjustment layer Invert darkens composite; undo reverts', async () => {
+    await freshDoc();
+    const darkNow = async () => countDark(await displayRect(100, 100, 200, 200));
+    assert.equal(await darkNow(), 0, 'fresh doc is not white');
+    await clickSubMenu('Layer', 'New Adjustment Layer', 'Invert');
+    assert.ok((await darkNow()) > 5000, 'invert adjustment did not darken the composite');
+    const hasIcon = await ev(() => {
+      const icon = document.querySelector('#layers-panel .layer-adjust-icon');
+      return !!icon && icon.textContent.includes('◐');
+    });
+    assert.ok(hasIcon, 'adjustment layer row lacks the ◐ icon');
+    await undo();
+    assert.equal(await darkNow(), 0, 'undo did not remove the invert effect');
+    // Re-add (dialog-free path) — composite must go black again.
+    await clickSubMenu('Layer', 'New Adjustment Layer', 'Invert');
+    assert.ok((await darkNow()) > 5000, 're-added adjustment did not darken the composite');
+  });
+
+  // Check 17: magic wand selects the uniform canvas; Ctrl+D clears.
+  await check('17. Magic wand selects whole uniform doc; Ctrl+D clears', async () => {
+    await freshDoc();
+    await key('KeyW');
+    assert.equal(await ev(() => window.__nms.state.activeTool), 'wand');
+    await clickDoc(640, 400);
+    const info = await ev(() => {
+      const sel = window.__nms.state.selection;
+      if (!sel || sel.type !== 'mask') return { type: sel && sel.type, frac: 0 };
+      const d = sel.mask.getContext('2d').getImageData(0, 0, sel.mask.width, sel.mask.height).data;
+      let on = 0;
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) on++;
+      return { type: sel.type, frac: on / (sel.mask.width * sel.mask.height) };
+    });
+    assert.equal(info.type, 'mask', 'wand did not produce a mask selection');
+    assert.ok(info.frac > 0.99, `wand selected only ${(info.frac * 100).toFixed(1)}% of the doc`);
+    await key('KeyD', ['Control']);
+    assert.equal(await ev(() => window.__nms.state.selection), null, 'Ctrl+D did not deselect');
+  });
+
+  // Check 18: clone stamp duplicates a dot at the drag location.
+  await check('18. Clone stamp copies the dot to the drag location', async () => {
+    // Doc is fresh white from check 17; primary is black.
+    await key('KeyB');
+    await clickDoc(400, 400); // source dot
+    assert.ok((await layerDarkCount(390, 390, 20, 20)) > 0, 'source dot missing');
+    await key('KeyS');
+    assert.equal(await ev(() => window.__nms.state.activeTool), 'clone');
+    await page.keyboard.down('Alt');
+    await clickDoc(400, 400); // record the clone source on the dot
+    await page.keyboard.up('Alt');
+    await dragDoc(600, 600, 760, 600); // stamp: source + (pt - strokeStart)
+    assert.ok((await layerDarkCount(585, 585, 30, 30)) > 0, 'no cloned dot at the drag location');
+    assert.ok((await layerDarkCount(390, 390, 20, 20)) > 0, 'source dot was destroyed');
+  });
+
+  // Check 19: cut/copy/paste internal round trip via keyboard shortcuts.
+  await check('19. Cut/Copy/Paste internal round trip', async () => {
+    await freshDoc();
+    await key('KeyB');
+    await dragDoc(300, 600, 500, 600); // black stroke
+    await key('KeyM');
+    await dragDoc(280, 580, 520, 620); // rect select around the stroke
+    await key('KeyC', ['Control']);
+    await page.waitForFunction(
+      () => import('/js/io/clipboard.js').then((m) => m.hasClipboard()),
+      { timeout: 5000 },
+    );
+    await key('KeyX', ['Control']);
+    await page.waitForFunction(() => {
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      return layer.ctx.getImageData(400, 600, 1, 1).data[3] === 0;
+    }, { timeout: 5000 });
+    await key('KeyV', ['Control']);
+    await page.waitForFunction(
+      () => window.__nms.state.doc.layers.length === 2, { timeout: 5000 });
+    const pasted = await ev(() => {
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      const d = layer.ctx.getImageData(0, 0, doc.width, doc.height).data;
+      let dark = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] < 80 && d[i + 1] < 80 && d[i + 2] < 80 && d[i + 3] > 200) dark++;
+      }
+      return { name: layer.name, dark };
+    });
+    assert.equal(pasted.name, 'Pasted', 'pasted layer is not named/active "Pasted"');
+    assert.ok(pasted.dark > 50, `pasted layer has only ${pasted.dark} dark px`);
+  });
+
+  // Check 20: WebP export produces an image/webp blob.
+  await check('20. WebP export produces an image/webp blob', async () => {
+    const type = await ev(async () => {
+      let href = null;
+      const orig = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () { href = this.href; };
+      try {
+        await window.__nms.io.exportImage('webp');
+      } finally {
+        HTMLAnchorElement.prototype.click = orig;
+      }
+      if (!href) throw new Error('exportImage did not trigger an anchor download');
+      const blob = await (await fetch(href)).blob();
+      return blob.type;
+    });
+    assert.equal(type, 'image/webp');
+  });
+
+  // Check 21: Levels via the Filter menu — identity keeps pixels; inBlack=128
+  // clips a painted mid-gray to black.
+  await check('21. Levels dialog: identity no-op; inBlack=128 clips gray', async () => {
+    await freshDoc();
+    await ev(() => { window.__nms.state.primaryColor = '#808080'; });
+    await key('KeyB');
+    await clickDoc(640, 400);
+    const before = await sampleLayer(640, 400);
+    assert.ok(Math.abs(before[0] - 128) <= 8, `expected mid-gray dab, got ${before[0]}`);
+    await clickMenu('Filter', 'Levels');
+    await waitDialog();
+    const sliders = await ev(() => document.querySelectorAll('.dialog-overlay input[type="range"]').length);
+    assert.equal(sliders, 5, `expected 5 levels sliders, got ${sliders}`);
+    await confirmDialog();
+    assert.deepEqual(await sampleLayer(640, 400), before, 'identity levels changed pixels');
+    await clickMenu('Filter', 'Levels');
+    await waitDialog();
+    await ev(() => {
+      const s = document.querySelector('.dialog-overlay input[type="range"]'); // first row = inBlack
+      s.value = '128';
+      s.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await confirmDialog();
+    const after = await sampleLayer(640, 400);
+    assert.ok(after[0] <= 8, `inBlack=128 did not clip gray to black: ${after[0]}`);
+  });
+
+  // Check 22: autosave data path — serializeProject captures the stroke,
+  // loadProjectData restores it; loadAutosave() resolves on a fresh profile.
+  await check('22. serializeProject/loadProjectData round trip; loadAutosave resolves', async () => {
+    await freshDoc();
+    const blank = await ev(() => window.__nms.io.serializeProject());
+    await key('KeyB');
+    await dragDoc(300, 600, 700, 600);
+    const withStroke = await ev(() => window.__nms.io.serializeProject());
+    assert.notEqual(withStroke.layers[0].png, blank.layers[0].png, 'serializeProject missed the stroke');
+    // Dirty the doc (fill it black), then restore from the serialized data.
+    await key('KeyG');
+    await clickDoc(100, 100);
+    assert.deepEqual((await sampleLayer(100, 100)).slice(0, 3), [0, 0, 0], 'fill missing before load');
+    const ok = await ev(async (data) => window.__nms.io.loadProjectData(data), withStroke);
+    assert.equal(ok, true, 'loadProjectData rejected its own serializeProject output');
+    const after = await ev(() => ({
+      layers: window.__nms.state.doc.layers.length,
+      w: window.__nms.state.doc.width,
+      h: window.__nms.state.doc.height,
+    }));
+    assert.deepEqual(after, { layers: 1, w: 1280, h: 800 }, 'doc shape mismatch after load');
+    assert.deepEqual((await sampleLayer(500, 600)).slice(0, 3), [0, 0, 0], 'stroke pixel not restored');
+    assert.deepEqual((await sampleLayer(100, 100)).slice(0, 3), [255, 255, 255], 'fill not reverted by load');
+    const autosaved = await ev(() => window.__nms.autosave.loadAutosave());
+    assert.ok(autosaved === null || autosaved.version === 1, 'loadAutosave returned an unexpected value');
+  });
+
+  // Check 23: history panel rows drive history.jumpTo both directions.
+  await check('23. History panel: rows render; clicking jumps history', async () => {
+    await freshDoc();
+    assert.ok(await ev(() => !!document.getElementById('history-panel')), '#history-panel missing');
+    await ev(() => document.querySelector('#layers-panel button[title="New Layer"]').click());
+    await key('KeyB');
+    await dragDoc(300, 300, 600, 300); // stroke B
+    await dragDoc(300, 500, 600, 500); // stroke C
+    const rows = await ev(() =>
+      [...document.querySelectorAll('#history-panel .history-row')].map((r) => r.textContent));
+    assert.equal(rows.length, 3, `expected 3 history rows, got ${rows.length}: ${rows.join(',')}`);
+    assert.equal(rows[0], 'New Layer', `unexpected oldest row: ${rows[0]}`);
+    // Click the newest row -> exactly 2 undos remain (stroke C undone).
+    await ev(() => {
+      const rs = document.querySelectorAll('#history-panel .history-row');
+      rs[rs.length - 1].click();
+    });
+    assert.ok((await layerDarkCount(300, 290, 300, 20)) > 0, 'stroke B missing after jump');
+    assert.equal(await layerDarkCount(300, 490, 300, 20), 0, 'stroke C still present after jump');
+    // Click the oldest row -> jumpTo(0): everything undone, 1 layer left.
+    await ev(() => document.querySelector('#history-panel .history-row').click());
+    assert.equal(await ev(() => window.__nms.state.doc.layers.length), 1, 'jumpTo(0) did not restore 1 layer');
+  });
+
+  // Check 24: Shift+M ellipse select; Select > Invert; Select > Feather….
+  await check('24. Ellipse select + Invert + Feather', async () => {
+    await freshDoc();
+    await key('KeyM', ['Shift']);
+    assert.equal(await ev(() => window.__nms.state.activeTool), 'selectEllipse');
+    await dragDoc(300, 300, 520, 440);
+    const sel = await ev(() => window.__nms.state.selection);
+    assert.ok(sel && sel.type === 'ellipse', `expected ellipse selection, got ${sel && sel.type}`);
+    await clickMenu('Select', 'Invert');
+    assert.equal((await ev(() => window.__nms.state.selection)).invert, true, 'invert flag not set');
+    await clickMenu('Select', 'Feather');
+    await waitDialog();
+    await ev(() => {
+      const input = document.querySelector('.dialog-overlay input[type="number"]');
+      input.value = '10';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await confirmDialog();
+    assert.equal((await ev(() => window.__nms.state.selection)).feather, 10, 'feather not applied');
   });
 
   // Check 1 (asserted last): zero console errors / pageerrors across the run.

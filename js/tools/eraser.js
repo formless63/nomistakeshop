@@ -1,9 +1,9 @@
 // js/tools/eraser.js — same stroke engine as brush, painting with
-// 'destination-out' to erase the active layer. Color is irrelevant;
-// the stamp only carries alpha.
+// 'destination-out' into getPaintTarget() (erasing a mask is destination-
+// out on the mask ctx). Color is irrelevant; the stamp only carries alpha.
 
 import { state, emit, getToolOption } from '../core/state.js';
-import { getActiveLayer } from '../core/document.js';
+import { getPaintTarget } from '../core/document.js';
 import { createCanvas } from '../core/canvasUtils.js';
 import { withSelectionClip } from './selectionPath.js';
 
@@ -39,6 +39,8 @@ function quadPoint(p0, p1, p2, t) {
 let painting = false;
 let last = null;
 let lastMid = null;
+let strokeCtx = null;   // paint-target ctx captured at pointerdown
+let strokeLayer = null; // layer owning that ctx (for layer:content payloads)
 
 function opts() {
   return {
@@ -76,11 +78,17 @@ export default {
   ],
 
   onPointerDown(pt) {
-    const layer = getActiveLayer();
-    if (!layer) return;
+    const target = getPaintTarget();
+    if (!target) {
+      emit('status:message', { text: 'Select a pixel layer' });
+      return;
+    }
+    const { ctx, layer } = target;
+    strokeCtx = ctx;
+    strokeLayer = layer;
     const { size, hardness, opacity } = opts();
     const stamp = getStamp(size, hardness);
-    withSelectionClip(layer.ctx, (ctx) => stampAt(ctx, stamp, size, opacity, pt.x, pt.y));
+    withSelectionClip(ctx, (c) => stampAt(c, stamp, size, opacity, pt.x, pt.y));
     painting = true;
     last = { ...pt };
     lastMid = { ...pt };
@@ -88,39 +96,38 @@ export default {
   },
 
   onPointerMove(pt) {
-    if (!painting || !state.isPointerDown) return;
-    const layer = getActiveLayer();
-    if (!layer) return;
+    if (!painting || !state.isPointerDown || !strokeCtx) return;
     const { size, hardness, opacity } = opts();
     const stamp = getStamp(size, hardness);
     const spacing = Math.max(0.5, size / 4);
     const mid = { x: (last.x + pt.x) / 2, y: (last.y + pt.y) / 2 };
-    withSelectionClip(layer.ctx, (ctx) =>
+    withSelectionClip(strokeCtx, (ctx) =>
       stampSegment(ctx, stamp, size, opacity, spacing, lastMid, last, mid)
     );
     last = { ...pt };
     lastMid = mid;
-    emit('layer:content', { layerId: layer.id });
+    emit('layer:content', { layerId: strokeLayer.id });
   },
 
   onPointerUp(pt) {
     if (!painting) return;
-    const layer = getActiveLayer();
     painting = false;
-    if (layer) {
+    if (strokeCtx) {
       const { size, hardness, opacity } = opts();
       const stamp = getStamp(size, hardness);
       const spacing = Math.max(0.5, size / 4);
-      withSelectionClip(layer.ctx, (ctx) =>
+      withSelectionClip(strokeCtx, (ctx) =>
         stampSegment(ctx, stamp, size, opacity, spacing, lastMid, last, pt)
       );
-      emit('layer:content', { layerId: layer.id });
+      emit('layer:content', { layerId: strokeLayer.id });
     }
     last = lastMid = null;
+    strokeCtx = strokeLayer = null;
   },
 
   onDeactivate() {
     painting = false;
     last = lastMid = null;
+    strokeCtx = strokeLayer = null;
   },
 };

@@ -1,24 +1,32 @@
-// js/tools/move.js — drags the active layer's pixels.
-// Snapshots the layer canvas at pointerdown; on move, clears and redraws it
-// shifted by the integer drag delta; commits on pointerup.
+// js/tools/move.js — drags the active layer's pixels (and its mask, when
+// present, by the same delta). Snapshots both canvases at pointerdown; on
+// move, clears and redraws them shifted by the integer drag delta; commits
+// on pointerup. Adjustment layers have no pixels: status message, no-op.
 
 import { emit } from '../core/state.js';
 import { getActiveLayer } from '../core/document.js';
 import { cloneCanvas } from '../core/canvasUtils.js';
 
 let snapshot = null;
+let maskSnapshot = null;
 let start = null;
 let lastDx = 0;
 let lastDy = 0;
 
-function applyOffset(layer, dx, dy) {
-  const ctx = layer.ctx;
+function shiftCanvas(ctx, canvas, snap, dx, dy) {
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = 1;
-  ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height);
-  ctx.drawImage(snapshot, dx, dy);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(snap, dx, dy);
   ctx.restore();
+}
+
+function applyOffset(layer, dx, dy) {
+  shiftCanvas(layer.ctx, layer.canvas, snapshot, dx, dy);
+  if (maskSnapshot && layer.mask) {
+    shiftCanvas(layer.mask.ctx, layer.mask.canvas, maskSnapshot, dx, dy);
+  }
   emit('layer:content', { layerId: layer.id });
 }
 
@@ -33,7 +41,12 @@ export default {
   onPointerDown(pt) {
     const layer = getActiveLayer();
     if (!layer) return;
+    if (layer.type === 'adjustment') {
+      emit('status:message', { text: 'Adjustment layers cannot be moved' });
+      return;
+    }
     snapshot = cloneCanvas(layer.canvas);
+    maskSnapshot = layer.mask ? cloneCanvas(layer.mask.canvas) : null;
     start = { ...pt };
     lastDx = 0;
     lastDy = 0;
@@ -58,11 +71,13 @@ export default {
       applyOffset(layer, Math.round(pt.x - start.x), Math.round(pt.y - start.y));
     }
     snapshot = null;
+    maskSnapshot = null;
     start = null;
   },
 
   onDeactivate() {
     snapshot = null;
+    maskSnapshot = null;
     start = null;
   },
 };

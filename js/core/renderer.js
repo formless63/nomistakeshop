@@ -3,8 +3,14 @@
 // devicePixelRatio for crispness. Zoom/pan live in state; renderer reads
 // and writes them. All DOM access happens inside functions (init/render),
 // so importing this module in Node is safe.
+//
+// v2: the layer loop is delegated to compositeLayers() (masks + adjustment
+// layers included). Selection outlines cover rect/ellipse/lasso; mask-type
+// selections intentionally draw NO outline (documented choice — a bounding
+// box of scattered mask pixels is more misleading than helpful).
 
 import { state, on, emit } from './state.js';
+import { compositeLayers } from './composite.js';
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 32;
@@ -49,6 +55,13 @@ function traceSelectionPath(context, sel) {
   if (sel.type === 'rect') {
     const a = renderer.docToScreen(sel.x, sel.y);
     context.rect(a.x, a.y, sel.w * state.zoom, sel.h * state.zoom);
+  } else if (sel.type === 'ellipse') {
+    const a = renderer.docToScreen(sel.x + sel.w / 2, sel.y + sel.h / 2);
+    context.ellipse(
+      a.x, a.y,
+      (Math.abs(sel.w) / 2) * state.zoom, (Math.abs(sel.h) / 2) * state.zoom,
+      0, 0, Math.PI * 2,
+    );
   } else if (sel.type === 'lasso' && sel.points && sel.points.length) {
     const p0 = renderer.docToScreen(sel.points[0].x, sel.points[0].y);
     context.moveTo(p0.x, p0.y);
@@ -69,6 +82,28 @@ function drawSelection(context, sel) {
   context.stroke();
   context.setLineDash([4, 4]);
   context.strokeStyle = 'rgba(0,0,0,0.9)';
+  context.stroke();
+  context.restore();
+}
+
+function drawGrid(context, doc) {
+  const { zoom, panX, panY } = state;
+  const size = state.grid.size;
+  if (!(size > 0) || zoom * size < 8) return; // skip when lines would be too dense
+  context.save();
+  context.translate(panX, panY);
+  context.scale(zoom, zoom);
+  context.strokeStyle = 'rgba(0,0,0,0.2)';
+  context.lineWidth = 1 / zoom;
+  context.beginPath();
+  for (let x = 0; x <= doc.width; x += size) {
+    context.moveTo(x, 0);
+    context.lineTo(x, doc.height);
+  }
+  for (let y = 0; y <= doc.height; y += size) {
+    context.moveTo(0, y);
+    context.lineTo(doc.width, y);
+  }
   context.stroke();
   context.restore();
 }
@@ -125,23 +160,22 @@ export const renderer = {
     ctx.fillRect(panX, panY, doc.width * zoom, doc.height * zoom);
     ctx.restore();
 
-    // Layers bottom (index 0) to top, respecting opacity + blend mode.
+    // Full layer-stack composite (handles visibility/opacity/blend, masks,
+    // adjustment layers) drawn once, scaled by zoom.
+    const composite = compositeLayers(doc.width, doc.height, doc.layers);
     ctx.save();
     ctx.translate(panX, panY);
     ctx.scale(zoom, zoom);
     ctx.imageSmoothingEnabled = zoom < 4;
-    for (const layer of doc.layers) {
-      if (!layer.visible) continue;
-      ctx.save();
-      ctx.globalAlpha = layer.opacity;
-      ctx.globalCompositeOperation = layer.blendMode;
-      ctx.drawImage(layer.canvas, 0, 0);
-      ctx.restore();
-    }
+    ctx.drawImage(composite, 0, 0);
     ctx.restore();
 
-    // Selection outline (dashed, marching-ants style).
-    if (state.selection) drawSelection(ctx, state.selection);
+    // Grid overlay (doc space, only when lines are >= 8 screen px apart).
+    if (state.grid && state.grid.enabled) drawGrid(ctx, doc);
+
+    // Selection outline (dashed, marching-ants style). Mask-type selections
+    // deliberately get no outline — see module header.
+    if (state.selection && state.selection.type !== 'mask') drawSelection(ctx, state.selection);
   },
 
   setZoom(z) {
@@ -160,6 +194,12 @@ export const renderer = {
   pan(dx, dy) {
     state.panX += dx;
     state.panY += dy;
+    emit('view:changed');
+  },
+
+  setGrid(enabled, size) {
+    state.grid.enabled = !!enabled;
+    if (size != null && size > 0) state.grid.size = size;
     emit('view:changed');
   },
 

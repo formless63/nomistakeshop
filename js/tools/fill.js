@@ -1,62 +1,29 @@
-// js/tools/fill.js — scanline flood fill on the active layer.
-// Explicit span stack, O(w*h), no recursion. Respects selection bounds:
-// a rect selection confines the fill to the rect, a lasso confines it to
-// pixels inside the polygon.
+// js/tools/fill.js — scanline flood fill into getPaintTarget() (the active
+// layer, or its mask when the mask is targeted). Mask targets store
+// visibility in ALPHA, so the painted color's luminance becomes the mask
+// value (black hides, white reveals) and RGB stays white. Explicit span
+// stack, O(w*h), no recursion. Respects the selection via
+// getSelectionMask(): a pixel is fillable when the mask's red channel at
+// that pixel is > 127.
 
 import { state, emit, getToolOption } from '../core/state.js';
-import { getActiveLayer } from '../core/document.js';
-import { hexToRgb, getLayerImageData, putLayerImageData } from '../core/canvasUtils.js';
+import { getPaintTarget } from '../core/document.js';
+import { hexToRgb } from '../core/canvasUtils.js';
+import { getSelectionMask } from './selectionPath.js';
 
-// Per-pixel allow mask derived from the selection, or null when unrestricted.
-function buildAllowedMask(sel, w, h) {
-  if (!sel) return null;
-  const mask = new Uint8Array(w * h);
-  if (sel.type === 'rect') {
-    const x0 = Math.max(0, Math.floor(sel.x));
-    const y0 = Math.max(0, Math.floor(sel.y));
-    const x1 = Math.min(w, Math.ceil(sel.x + sel.w));
-    const y1 = Math.min(h, Math.ceil(sel.y + sel.h));
-    for (let y = y0; y < y1; y++) {
-      mask.fill(1, y * w + x0, y * w + x1);
-    }
-  } else if (sel.type === 'lasso' && sel.points && sel.points.length >= 3) {
-    const pts = sel.points;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of pts) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
-    }
-    const x0 = Math.max(0, Math.floor(minX));
-    const y0 = Math.max(0, Math.floor(minY));
-    const x1 = Math.min(w - 1, Math.ceil(maxX));
-    const y1 = Math.min(h - 1, Math.ceil(maxY));
-    // Ray-casting point-in-polygon over the bounding box only.
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
-        let inside = false;
-        for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-          const xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
-          if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
-            inside = !inside;
-          }
-        }
-        if (inside) mask[y * w + x] = 1;
-      }
-    }
-  }
-  return mask;
-}
-
-function floodFill(layer, sx, sy, tolerance) {
-  const w = layer.canvas.width;
-  const h = layer.canvas.height;
+function floodFill(ctx, w, h, sx, sy, tolerance, isMask = false) {
   if (sx < 0 || sy < 0 || sx >= w || sy >= h) return false;
 
-  const image = getLayerImageData(layer);
+  const image = ctx.getImageData(0, 0, w, h);
   const d = image.data;
-  const allowed = buildAllowedMask(state.selection, w, h);
+
+  // Per-pixel allow mask rasterized from the selection, or null when
+  // unrestricted. Mask red channel > 127 = selected.
+  const maskCanvas = getSelectionMask();
+  const maskData = maskCanvas
+    ? maskCanvas.getContext('2d').getImageData(0, 0, w, h).data
+    : null;
+  const allowed = (i) => !maskData || maskData[i * 4] > 127;
 
   const seedIdx = (sy * w + sx) * 4;
   const sr = d[seedIdx], sg = d[seedIdx + 1], sb = d[seedIdx + 2], sa = d[seedIdx + 3];
@@ -78,10 +45,15 @@ function floodFill(layer, sx, sy, tolerance) {
   };
   const ok = (x, y) => {
     const i = y * w + x;
-    return !filled[i] && (!allowed || allowed[i]) && matches(i);
+    return !filled[i] && allowed(i) && matches(i);
   };
 
   const { r, g, b } = hexToRgb(state.primaryColor);
+  // Mask fill: luminance -> alpha (visibility); RGB pinned to white.
+  const fr = isMask ? 255 : r;
+  const fg = isMask ? 255 : g;
+  const fb = isMask ? 255 : b;
+  const fa = isMask ? Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b) : 255;
   const filled = new Uint8Array(w * h);
   const stack = [[sx, sy]];
 
@@ -97,10 +69,10 @@ function floodFill(layer, sx, sy, tolerance) {
       const i = py * w + x;
       filled[i] = 1;
       const p = i * 4;
-      d[p] = r;
-      d[p + 1] = g;
-      d[p + 2] = b;
-      d[p + 3] = 255;
+      d[p] = fr;
+      d[p + 1] = fg;
+      d[p + 2] = fb;
+      d[p + 3] = fa;
       // Seed the rows above/below once per contiguous matching run.
       if (py > 0) {
         if (ok(x, py - 1)) {
@@ -116,7 +88,7 @@ function floodFill(layer, sx, sy, tolerance) {
     }
   }
 
-  putLayerImageData(layer, image);
+  ctx.putImageData(image, 0, 0);
   return true;
 }
 
@@ -131,12 +103,18 @@ export default {
   ],
 
   onPointerDown(pt) {
-    const layer = getActiveLayer();
-    if (!layer) return;
+    const target = getPaintTarget();
+    if (!target) {
+      emit('status:message', { text: 'Select a pixel layer' });
+      return;
+    }
+    const { ctx, layer, isMask } = target;
     const tolerance = getToolOption('fill', 'tolerance', 32);
     const x = Math.round(pt.x);
     const y = Math.round(pt.y);
-    if (floodFill(layer, x, y, tolerance)) {
+    const w = ctx.canvas.width;
+    const h = ctx.canvas.height;
+    if (floodFill(ctx, w, h, x, y, tolerance, isMask)) {
       emit('layer:content', { layerId: layer.id });
     }
   },

@@ -20,13 +20,21 @@ function emitDocChanged() {
   emit('layer:content');
 }
 
-// Rebuild every layer's canvas at (newW, newH) via drawFn(ctx, oldCanvas).
+// Rebuild every pixel layer's canvas (and mask, if any) at (newW, newH)
+// via drawFn(ctx, oldCanvas). Adjustment layers carry no pixels — skipped.
 function rebuildLayers(doc, newW, newH, drawFn) {
   for (const layer of doc.layers) {
+    if (layer.type === 'adjustment') continue;
     const { canvas, ctx } = createCanvas(newW, newH);
     drawFn(ctx, layer.canvas);
     layer.canvas = canvas;
     layer.ctx = ctx;
+    if (layer.mask) {
+      const m = createCanvas(newW, newH);
+      drawFn(m.ctx, layer.mask.canvas);
+      layer.mask.canvas = m.canvas;
+      layer.mask.ctx = m.ctx;
+    }
   }
 }
 
@@ -93,25 +101,28 @@ function flipLayer(id, horizontal) {
   const doc = getDoc();
   if (!doc) return;
   const layer = doc.layers.find((l) => l.id === id);
-  if (!layer) return;
+  if (!layer || layer.type === 'adjustment') return;
   history.push(horizontal ? 'Flip Layer Horizontal' : 'Flip Layer Vertical');
-  const w = layer.canvas.width;
-  const h = layer.canvas.height;
-  // Intermediate copy so we never draw a canvas onto itself mid-transform.
-  const { canvas: tmp, ctx: tmpCtx } = createCanvas(w, h);
-  tmpCtx.drawImage(layer.canvas, 0, 0);
-  const ctx = layer.ctx;
-  ctx.save();
-  ctx.clearRect(0, 0, w, h);
-  if (horizontal) {
-    ctx.translate(w, 0);
-    ctx.scale(-1, 1);
-  } else {
-    ctx.translate(0, h);
-    ctx.scale(1, -1);
-  }
-  ctx.drawImage(tmp, 0, 0);
-  ctx.restore();
+  const flipCanvasInPlace = (canvas, ctx) => {
+    const w = canvas.width;
+    const h = canvas.height;
+    // Intermediate copy so we never draw a canvas onto itself mid-transform.
+    const { canvas: tmp, ctx: tmpCtx } = createCanvas(w, h);
+    tmpCtx.drawImage(canvas, 0, 0);
+    ctx.save();
+    ctx.clearRect(0, 0, w, h);
+    if (horizontal) {
+      ctx.translate(w, 0);
+      ctx.scale(-1, 1);
+    } else {
+      ctx.translate(0, h);
+      ctx.scale(1, -1);
+    }
+    ctx.drawImage(tmp, 0, 0);
+    ctx.restore();
+  };
+  flipCanvasInPlace(layer.canvas, layer.ctx);
+  if (layer.mask) flipCanvasInPlace(layer.mask.canvas, layer.mask.ctx);
   emit('layer:content', { layerId: id });
 }
 
@@ -186,4 +197,35 @@ export function cropToRect(rect) {
   doc.height = h;
   setSelection(null);
   emitDocChanged();
+}
+
+// Scale/rotate the active pixel layer in place (doc size unchanged).
+export function transformActiveLayer({ scaleXPct = 100, scaleYPct = 100, rotateDeg = 0 } = {}) {
+  const doc = getDoc();
+  if (!doc) return;
+  const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+  if (!layer || layer.type === 'adjustment') return;
+  const sx = Number(scaleXPct) / 100;
+  const sy = Number(scaleYPct) / 100;
+  const rad = (Number(rotateDeg) || 0) * (Math.PI / 180);
+  if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx <= 0 || sy <= 0) return;
+  if (sx === 1 && sy === 1 && rad === 0) return; // identity — no-op
+  history.push('Transform Layer');
+  const transformInPlace = (canvas, ctx) => {
+    const w = canvas.width;
+    const h = canvas.height;
+    const { canvas: tmp, ctx: tmpCtx } = createCanvas(w, h);
+    tmpCtx.drawImage(canvas, 0, 0);
+    ctx.save();
+    ctx.clearRect(0, 0, w, h);
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(rad);
+    ctx.scale(sx, sy);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(tmp, -w / 2, -h / 2);
+    ctx.restore();
+  };
+  transformInPlace(layer.canvas, layer.ctx);
+  if (layer.mask) transformInPlace(layer.mask.canvas, layer.mask.ctx);
+  emit('layer:content', { layerId: layer.id });
 }

@@ -9,7 +9,11 @@ export const state = {
   secondaryColor: '#ffffff',
   zoom: 1,              // display scale factor
   panX: 0, panY: 0,     // viewport pan in screen px
-  selection: null,      // null | { type:'rect', x,y,w,h } | { type:'lasso', points:[{x,y}...] }
+  selection: null,      // null | { type:'rect'|'ellipse', x,y,w,h, invert, feather }
+                        // | { type:'lasso', points:[{x,y}...], invert, feather }
+                        // | { type:'mask', mask: canvas }  (white alpha = selected)
+  activeTarget: 'layer', // 'layer' | 'mask' — what paint tools draw into
+  grid: { enabled: false, size: 32 }, // doc-space grid overlay (renderer)
   isPointerDown: false, // managed by toolManager
 };
 
@@ -57,6 +61,13 @@ export function swapColors() {
 export function setSelection(sel) {
   state.selection = sel;
   emit('selection:changed', sel);
+}
+
+export function setActiveTarget(t) {
+  const target = t === 'mask' ? 'mask' : 'layer';
+  if (state.activeTarget === target) return;
+  state.activeTarget = target;
+  emit('layers:changed');
 }
 
 export function getToolOption(toolId, key, fallback) {

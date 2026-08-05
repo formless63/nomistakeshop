@@ -3,6 +3,10 @@
 // Canvas snapshot/restore are thin wrappers around it.
 // NOTE: this module never imports document.js (it restores state.doc directly),
 // so document.js -> history.js creates no import cycle.
+//
+// v2: snapshots round-trip BOTH layer kinds — pixel layers (cloned canvas,
+// cloned mask canvas + enabled flag) and adjustment layers (deep-copied
+// adjustment object). Restore rebuilds ctx objects for both.
 
 import { state, emit } from './state.js';
 import { cloneCanvas } from './canvasUtils.js';
@@ -58,9 +62,72 @@ export class SnapshotStack {
     this.undoStack.length = 0;
     this.redoStack.length = 0;
   }
+
+  // { entries: undo-stack labels oldest→newest, index: number of applicable
+  // undos } — the position a history panel highlights.
+  list() {
+    return { entries: this.undoStack.map((e) => e.label), index: this.undoStack.length };
+  }
+
+  // Pure jump: moves entries between the stacks (no snapshotting) so exactly
+  // `index` entries remain on the undo stack. Clamped to [0, total entries].
+  jumpTo(index) {
+    const total = this.undoStack.length + this.redoStack.length;
+    let target = Math.trunc(Number(index));
+    if (!Number.isFinite(target)) target = this.undoStack.length;
+    target = Math.max(0, Math.min(target, total));
+    while (this.undoStack.length > target) this.redoStack.push(this.undoStack.pop());
+    while (this.undoStack.length < target) this.undoStack.push(this.redoStack.pop());
+    return target;
+  }
 }
 
 // --- Thin DOM wrappers: snapshot/restore the current document ---
+
+function snapshotLayer(l) {
+  const base = {
+    id: l.id,
+    type: l.type || 'pixel',
+    name: l.name,
+    visible: l.visible,
+    opacity: l.opacity,
+    blendMode: l.blendMode,
+  };
+  if (base.type === 'adjustment') {
+    return { ...base, adjustment: l.adjustment ? JSON.parse(JSON.stringify(l.adjustment)) : null };
+  }
+  return {
+    ...base,
+    canvas: cloneCanvas(l.canvas),
+    mask: l.mask ? { canvas: cloneCanvas(l.mask.canvas), enabled: l.mask.enabled } : null,
+  };
+}
+
+function restoreLayer(s) {
+  const base = {
+    id: s.id,
+    type: s.type || 'pixel',
+    name: s.name,
+    visible: s.visible,
+    opacity: s.opacity,
+    blendMode: s.blendMode,
+  };
+  if (base.type === 'adjustment') {
+    return { ...base, adjustment: s.adjustment ? JSON.parse(JSON.stringify(s.adjustment)) : null };
+  }
+  const canvas = cloneCanvas(s.canvas); // clone again: snapshot stays immutable
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  let mask = null;
+  if (s.mask) {
+    const maskCanvas = cloneCanvas(s.mask.canvas);
+    mask = {
+      canvas: maskCanvas,
+      ctx: maskCanvas.getContext('2d', { willReadFrequently: true }),
+      enabled: s.mask.enabled,
+    };
+  }
+  return { ...base, canvas, ctx, mask };
+}
 
 function snapshotDoc() {
   const doc = state.doc;
@@ -70,38 +137,19 @@ function snapshotDoc() {
     height: doc.height,
     background: doc.background,
     activeLayerId: doc.activeLayerId,
-    layers: doc.layers.map((l) => ({
-      id: l.id,
-      name: l.name,
-      visible: l.visible,
-      opacity: l.opacity,
-      blendMode: l.blendMode,
-      canvas: cloneCanvas(l.canvas),
-    })),
+    layers: doc.layers.map(snapshotLayer),
   };
 }
 
 function restoreDoc(snap) {
-  const layers = snap.layers.map((s) => {
-    const canvas = cloneCanvas(s.canvas); // clone again: snapshot stays immutable
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    return {
-      id: s.id,
-      name: s.name,
-      visible: s.visible,
-      opacity: s.opacity,
-      blendMode: s.blendMode,
-      canvas,
-      ctx,
-    };
-  });
   state.doc = {
     width: snap.width,
     height: snap.height,
     background: snap.background,
-    layers,
+    layers: snap.layers.map(restoreLayer),
     activeLayerId: snap.activeLayerId,
   };
+  state.activeTarget = 'layer';
 }
 
 function emitRestored() {
@@ -154,6 +202,31 @@ export const history = {
   redoLabel() {
     const e = stack.peekRedo();
     return e ? e.label : null;
+  },
+
+  // { entries: [label,...] oldest→newest, index: number of applicable undos }.
+  list() {
+    return stack.list();
+  },
+
+  // Jumps so exactly `index` undos remain, via repeated undo()/redo()
+  // (bounded by the total number of entries; each step snapshots normally).
+  jumpTo(index) {
+    if (!state.doc) return;
+    const total = stack.undoStack.length + stack.redoStack.length;
+    let target = Math.trunc(Number(index));
+    if (!Number.isFinite(target)) return;
+    target = Math.max(0, Math.min(target, total));
+    let guard = total + 1;
+    while (stack.undoStack.length !== target && guard-- > 0) {
+      if (stack.undoStack.length > target) {
+        if (!stack.canUndo()) break;
+        history.undo();
+      } else {
+        if (!stack.canRedo()) break;
+        history.redo();
+      }
+    }
   },
 
   clear() {
