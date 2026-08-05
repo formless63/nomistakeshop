@@ -104,6 +104,12 @@ function buildMenus() {
             import('../io/psd.js').then((m) => m.exportPsd()).catch(() => {});
           },
         },
+        {
+          label: 'Export Optimized PNG',
+          action() {
+            import('../io/optimizePng.js').then((m) => m.exportOptimizedPng()).catch(() => {});
+          },
+        },
       ],
     },
     {
@@ -185,6 +191,34 @@ function buildMenus() {
           label: 'Crop to Selection',
           disabled: () => !state.selection || state.selection.type !== 'rect',
           action: () => transform.cropToRect(state.selection),
+        },
+        { separator: true },
+        {
+          label: 'AI Upscale ×2',
+          disabled: () => !activePixelLayer(),
+          action() {
+            import('../ops/upscale.js').then((m) => m.upscaleActiveLayer(2)).catch(() => {});
+          },
+        },
+        {
+          label: 'AI Upscale ×4',
+          disabled: () => !activePixelLayer(),
+          action() {
+            import('../ops/upscale.js').then((m) => m.upscaleActiveLayer(4)).catch(() => {});
+          },
+        },
+        { separator: true },
+        {
+          label: 'Image Info…',
+          action() {
+            import('../ops/imageInfo.js').then((m) => m.showImageInfo()).catch(() => {});
+          },
+        },
+        {
+          label: 'Extract Palette to Swatches',
+          action() {
+            import('../ops/imageInfo.js').then((m) => m.extractPalette()).catch(() => {});
+          },
         },
       ],
     },

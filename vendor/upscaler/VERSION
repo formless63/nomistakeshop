@@ -1,0 +1,9 @@
+upscaler 1.0.0 (upscaler.min.js, browser UMD build)
+https://github.com/thekevinscott/UpscalerJS
+
+@upscalerjs/default-model 1.0.0 (models/model.json + models/group1-shard1of1.bin only; code not vendored)
+https://github.com/thekevinscott/UpscalerJS
+
+@tensorflow/tfjs 4.11.0 (tf.min.js, browser UMD build; no LICENSE file ships in the
+npm tarball, LICENSE.tfjs fetched from the tfjs-v4.11.0 git tag)
+https://github.com/tensorflow/tfjs

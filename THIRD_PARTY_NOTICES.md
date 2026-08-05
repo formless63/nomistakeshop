@@ -14,6 +14,15 @@ text and a VERSION file with the exact version and upstream URL.
 | [libraw-wasm](https://github.com/ybouane/LibRaw-Wasm) | 1.6.0 | ISC | RAW file decoding (`vendor/libraw-wasm/`) |
 | [LibRaw](https://github.com/LibRaw/LibRaw) (compiled into libraw-wasm) | — | LGPL-2.1 | RAW decode backend; loaded dynamically, unmodified |
 | [OpenCV.js](https://github.com/opencv/opencv) via [@techstark/opencv-js](https://www.npmjs.com/package/@techstark/opencv-js) | 5.0.0-release.1 | Apache-2.0 | Content-aware fill / inpainting (`vendor/opencv/`) |
+| [exifr](https://github.com/MikeKovarik/exifr) | 7.1.3 | MIT | EXIF/metadata viewer (`vendor/exifr/`) |
+| [color-thief](https://github.com/lokesh/color-thief) | 3.5.0 | MIT | Palette extraction (`vendor/color-thief/`) |
+| [upng-js](https://github.com/photopea/UPNG.js) + [pako](https://github.com/nodeca/pako) | 2.1.0 / 1.0.11 | MIT | Optimized PNG export (`vendor/upng-js/`) |
+| [UpscalerJS](https://github.com/thekevinscott/UpscalerJS) + default model | 1.0.0 | MIT | AI upscale ×2/×4 (`vendor/upscaler/`, model weights vendored) |
+| [TensorFlow.js](https://github.com/tensorflow/tfjs) | 4.11.0 | Apache-2.0 | UpscalerJS inference backend (`vendor/upscaler/`) |
+
+Rejected on license grounds: **@imgly/background-removal** (AI background
+removal) is AGPL-3.0, incompatible with this project's licensing — the
+feature was dropped at the vendor gate rather than shipped.
 
 ## License-compliance notes
 

@@ -111,7 +111,7 @@ async function main() {
   browser = await puppeteer.launch({
     headless: true,
     executablePath: CHROME,
-    args: ['--no-sandbox'],
+    args: ['--no-sandbox', '--enable-unsafe-swiftshader'],
   });
   const page = await browser.newPage();
   await page.setViewport({ width: 1440, height: 900 });
@@ -927,6 +927,150 @@ async function main() {
     await ev(() => window.__nms.history.undo());
     assert.equal(await ev(() => window.__nms.state.doc.colorSpace), 'display-p3',
       'doc colorSpace lost after undo');
+    await freshDoc(); // back to srgb 1280x800 for cleanliness
+  });
+
+  // Check 32: Image menu > Image Info… — modal lists dimensions and color
+  // space; Esc closes it.
+  await check('32. Image Info dialog shows 1280x800 / sRGB; Esc closes', async () => {
+    await clickMenu('Image', 'Image Info');
+    await waitDialog();
+    const text = await ev(() => document.querySelector('.dialog-overlay').textContent);
+    assert.ok(text.includes('1280'), `dialog lacks width: ${text.slice(0, 200)}`);
+    assert.ok(text.includes('800'), `dialog lacks height: ${text.slice(0, 200)}`);
+    assert.ok(text.includes('sRGB'), `dialog lacks color space: ${text.slice(0, 200)}`);
+    await page.keyboard.press('Escape');
+    await waitDialogGone();
+  });
+
+  // Check 33: Extract Palette to Swatches — red/blue halves yield reddish and
+  // bluish swatches; clicking the reddish one sets primaryColor.
+  await check('33. Extract Palette: red+blue swatches; click sets primary', async () => {
+    await freshDoc();
+    await ev(() => {
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      layer.ctx.fillStyle = '#ff0000';
+      layer.ctx.fillRect(0, 0, 640, 800);
+      layer.ctx.fillStyle = '#0000ff';
+      layer.ctx.fillRect(640, 0, 640, 800);
+    });
+    await clickMenu('Image', 'Extract Palette to Swatches');
+    await page.waitForFunction(
+      () => document.querySelectorAll('#color-panel .color-presets .color-preset').length >= 2,
+      { timeout: 15000 },
+    );
+    const swatches = await ev(() =>
+      [...document.querySelectorAll('#color-panel .color-presets .color-preset')].map((s, i) => {
+        const m = getComputedStyle(s).backgroundColor.match(/\d+/g).map(Number);
+        return { i, r: m[0], g: m[1], b: m[2] };
+      }));
+    const reddish = swatches.find((s) => s.r > 150 && s.g < 100 && s.b < 100);
+    const bluish = swatches.find((s) => s.b > 150 && s.r < 100);
+    assert.ok(reddish, `no reddish swatch in ${JSON.stringify(swatches)}`);
+    assert.ok(bluish, `no bluish swatch in ${JSON.stringify(swatches)}`);
+    await ev((i) => {
+      document.querySelectorAll('#color-panel .color-presets .color-preset')[i].click();
+    }, reddish.i);
+    const primary = await ev(() => window.__nms.state.primaryColor);
+    const pm = primary.match(/\w\w/g).map((h) => parseInt(h, 16));
+    assert.ok(pm[0] > 150 && pm[1] < 100 && pm[2] < 100,
+      `primaryColor not reddish after swatch click: ${primary}`);
+  });
+
+  // Check 34: File > Export Optimized PNG — captured blob is a decodable PNG
+  // at doc dimensions, smaller than a plain toBlob PNG of the same flatten.
+  await check('34. Export Optimized PNG: valid PNG, smaller than plain', async () => {
+    // High-entropy content so 256-color quantization genuinely wins.
+    await ev(() => {
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      for (let i = 0; i < 6000; i++) {
+        layer.ctx.fillStyle = `rgb(${(i * 73) % 256},${(i * 151) % 256},${(i * 211) % 256})`;
+        layer.ctx.fillRect((i * 37) % 1272, (i * 91) % 792, 8, 8);
+      }
+    });
+    await ev(() => {
+      window.__capHref = null;
+      HTMLAnchorElement.prototype.__origClick = HTMLAnchorElement.prototype.click;
+      HTMLAnchorElement.prototype.click = function () { window.__capHref = this.href; };
+    });
+    try {
+      await clickMenu('File', 'Export Optimized PNG');
+      await page.waitForFunction(() => !!window.__capHref, { timeout: 30000 });
+    } finally {
+      await ev(() => {
+        HTMLAnchorElement.prototype.click = HTMLAnchorElement.prototype.__origClick;
+        delete HTMLAnchorElement.prototype.__origClick;
+      });
+    }
+    const info = await ev(async () => {
+      const blob = await (await fetch(window.__capHref)).blob();
+      const bmp = await createImageBitmap(blob);
+      const { flattenImage } = await import('/js/core/document.js');
+      const plain = await new Promise((r) => flattenImage().toBlob(r, 'image/png'));
+      return { type: blob.type, size: blob.size, w: bmp.width, h: bmp.height, plainSize: plain.size };
+    });
+    assert.equal(info.type, 'image/png', `bad blob type: ${info.type}`);
+    assert.deepEqual({ w: info.w, h: info.h }, { w: 1280, h: 800 }, 'decoded PNG size mismatch');
+    assert.ok(info.size < info.plainSize,
+      `optimized ${info.size} not smaller than plain ${info.plainSize}`);
+  });
+
+  // Check 35: AI Upscale ×2 twice on a tiny 48x32 doc (SwiftShader WebGL is
+  // far too slow at 1280px) — 96x64 with real content and edge blending,
+  // then 192x128 (shared Upscaler instance reuse). 240s budget per pass.
+  await check('35. AI Upscale ×2 twice: 48x32 -> 96x64 -> 192x128', async () => {
+    await ev(() => {
+      window.__nms.createDocument(48, 32, '#ffffff');
+      window.__nms.renderer.fitToScreen();
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      for (let x = 0; x < 48; x += 8) {
+        layer.ctx.fillStyle = (x / 8) % 2 === 0 ? '#ff0000' : '#0000ff';
+        layer.ctx.fillRect(x, 0, 8, 32);
+      }
+    });
+    const waitWidth = (w) => page.waitForFunction((target) => {
+      const doc = window.__nms.state.doc;
+      const layer = doc && doc.layers.find((l) => l.id === doc.activeLayerId);
+      return !!layer && layer.canvas.width === target;
+    }, { timeout: 240000, polling: 1000 }, w);
+
+    await ev(() => {
+      import('/js/ops/upscale.js').then((m) => m.upscaleActiveLayer(2));
+    });
+    await waitWidth(96);
+
+    const stats = await ev(() => {
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      const d = layer.ctx.getImageData(0, 0, layer.canvas.width, layer.canvas.height).data;
+      let red = 0; let blue = 0; let mixed = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const r = d[i]; const g = d[i + 1]; const b = d[i + 2]; const a = d[i + 3];
+        if (a < 200) continue;
+        if (r > 200 && g < 80 && b < 80) red++;
+        else if (b > 200 && r < 80 && g < 80) blue++;
+        else if (r > 60 && b > 60) mixed++;
+      }
+      return { w: layer.canvas.width, h: layer.canvas.height, red, blue, mixed };
+    });
+    assert.deepEqual({ w: stats.w, h: stats.h }, { w: 96, h: 64 }, 'first upscale size mismatch');
+    assert.ok(stats.red > 100, `red content lost: ${stats.red} red px`);
+    assert.ok(stats.blue > 100, `blue content lost: ${stats.blue} blue px`);
+    assert.ok(stats.mixed > 0, 'no intermediate values at the stripe edges');
+
+    await ev(() => {
+      import('/js/ops/upscale.js').then((m) => m.upscaleActiveLayer(2));
+    });
+    await waitWidth(192);
+    const size2 = await ev(() => {
+      const doc = window.__nms.state.doc;
+      const layer = doc.layers.find((l) => l.id === doc.activeLayerId);
+      return { w: layer.canvas.width, h: layer.canvas.height };
+    });
+    assert.deepEqual(size2, { w: 192, h: 128 }, 'second upscale size mismatch');
     await freshDoc(); // back to srgb 1280x800 for cleanliness
   });
 

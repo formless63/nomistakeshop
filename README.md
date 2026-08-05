@@ -35,6 +35,10 @@ Any static file server works (`npx http-server`, nginx, …). Opening
   flood fill, gradient (linear/radial), text, shapes, hand, zoom
 - **Content-aware fill** — select a region, Edit > Content-Aware Fill
   (OpenCV Telea inpainting, lazy-loaded on first use)
+- **AI upscale** — Image > AI Upscale ×2/×4 (UpscalerJS super-resolution,
+  runs fully in-browser)
+- **Image info & palette** — Image > Image Info… (EXIF/metadata viewer),
+  Extract Palette to Swatches (dominant colors into the swatch grid)
 - **Filters** — brightness, contrast, saturation, hue rotate, hue/saturation/
   lightness, grayscale, invert, sepia, threshold, posterize, levels, curves
   (visual editor), gradient map, box blur, sharpen, noise, pixelate, emboss,
@@ -47,7 +51,8 @@ Any static file server works (`npx http-server`, nginx, …). Opening
   cut/copy/paste (internal + system clipboard), paste as new layer
 - **File formats** — open images, **PSD** (layers, masks, blend modes),
   **HEIC**, and **RAW** (CR2/NEF/DNG/ARW/…) via File > Open or drag & drop;
-  export PNG / JPEG / WebP / **PSD**; save/load full layered project
+  export PNG / JPEG / WebP / **PSD** / **optimized PNG** (UPNG quantization,
+  typically 70-90% smaller); save/load full layered project
   (`.nmsproject`, includes masks and adjustment layers)
 - **Color** — sRGB or **Display P3** wide-gamut documents (gamut preserved
   through import → edit → export; on-screen preview is sRGB-mapped)
@@ -102,6 +107,10 @@ algorithm is the problem, we adopt battle-tested FOSS rather than reinvent it:
 | [heic2any](https://github.com/alexcorvi/heic2any) + [libheif](https://github.com/strukturag/libheif) | MIT / LGPL-3.0 | HEIC/HEIF import (vendored, lazy-loaded) |
 | [libraw-wasm](https://github.com/ybouane/LibRaw-Wasm) + [LibRaw](https://github.com/LibRaw/LibRaw) | ISC / LGPL-2.1 | RAW import — CR2/NEF/DNG/ARW/… (vendored, lazy-loaded) |
 | [OpenCV.js](https://github.com/opencv/opencv) | Apache-2.0 | Content-aware fill inpainting (vendored, lazy-loaded) |
+| [UpscalerJS](https://github.com/thekevinscott/UpscalerJS) + [TensorFlow.js](https://github.com/tensorflow/tfjs) | MIT / Apache-2.0 | AI upscale ×2/×4 (vendored, lazy-loaded) |
+| [exifr](https://github.com/MikeKovarik/exifr) | MIT | Image metadata viewer (vendored, lazy-loaded) |
+| [color-thief](https://github.com/lokesh/color-thief) | MIT | Palette extraction (vendored, lazy-loaded) |
+| [UPNG.js](https://github.com/photopea/UPNG.js) + [pako](https://github.com/nodeca/pako) | MIT | Optimized PNG export (vendored, lazy-loaded) |
 | [Node.js](https://github.com/nodejs/node) | MIT | Runs the unit test runner (`node:test`) and the e2e script (dev only) |
 | [puppeteer-core](https://github.com/puppeteer/puppeteer) | Apache-2.0 | Drives headless Chrome in the e2e suite (dev only) |
 | [Playwright's Chromium build](https://github.com/microsoft/playwright) | Apache-2.0 | Local browser binary the e2e suite runs against (dev only) |
